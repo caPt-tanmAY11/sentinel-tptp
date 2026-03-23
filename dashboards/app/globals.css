@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --navy:      #1B2A4A;
+  --navy-50:   #EBF0FA;
+  --critical:  #DC2626;
+  --high:      #EA580C;
+  --moderate:  #D97706;
+  --watch:     #CA8A04;
+  --stable:    #16A34A;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Inter, system-ui, sans-serif; background: #F8FAFC; }
