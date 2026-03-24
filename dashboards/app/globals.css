@@ -3,8 +3,34 @@
 @tailwind utilities;
 
 :root {
-  --navy:      #1B2A4A;
-  --navy-50:   #EBF0FA;
+  --primary:                 #2b4bb9;
+  --primary-container:       #4865d3;
+  --on-primary:              #ffffff;
+  --on-primary-container:    #efefff;
+  --primary-fixed:           #dde1ff;
+  --primary-fixed-dim:       #b8c4ff;
+  --secondary:               #505f76;
+  --secondary-container:     #d0e1fb;
+  --tertiary:                #005a82;
+  --tertiary-container:      #0074a6;
+  --on-tertiary-container:   #e4f2ff;
+  --error:                   #ba1a1a;
+  --error-container:         #ffdad6;
+  --surface:                 #f7f9fb;
+  --surface-bright:          #f7f9fb;
+  --surface-dim:             #d8dadc;
+  --surface-container-lowest: #ffffff;
+  --surface-container-low:   #f2f4f6;
+  --surface-container:       #eceef0;
+  --surface-container-high:  #e6e8ea;
+  --surface-container-highest: #e0e3e5;
+  --on-surface:              #191c1e;
+  --on-surface-variant:      #434655;
+  --outline:                 #737686;
+  --outline-variant:         #c3c6d7;
+  --inverse-surface:         #2d3133;
+
+  /* Legacy risk tier vars */
   --critical:  #DC2626;
   --high:      #EA580C;
   --moderate:  #D97706;
@@ -13,4 +39,79 @@
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: Inter, system-ui, sans-serif; background: #F8FAFC; }
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: var(--surface);
+  color: var(--on-surface);
+}
+
+.font-headline { font-family: 'Plus Jakarta Sans', sans-serif; }
+.font-body     { font-family: 'Inter', sans-serif; }
+.font-label    { font-family: 'Inter', sans-serif; }
+
+/* Crystalline ambient background */
+.crystalline-bg {
+  background:
+    radial-gradient(circle at 0% 0%,   #dde1ff55 0%, transparent 45%),
+    radial-gradient(circle at 100% 100%, #c9e6ff55 0%, transparent 45%),
+    var(--surface);
+}
+
+/* Glass card */
+.glass-card {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.45);
+}
+
+/* Sidebar glass */
+.sidebar-glass {
+  background: rgba(247, 249, 251, 0.6);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-right: 1px solid rgba(195, 198, 215, 0.2);
+}
+
+/* Ambient shadow (no hard borders) */
+.ambient-shadow { box-shadow: 0 8px 40px rgba(25, 28, 30, 0.06); }
+.ambient-shadow-sm { box-shadow: 0 2px 16px rgba(25, 28, 30, 0.05); }
+
+/* Ghost border fallback */
+.ghost-border { border: 1px solid rgba(195, 198, 215, 0.25); }
+
+/* Material Symbols */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* Tier badge colors */
+.tier-critical { color: #DC2626; background: #FEF2F2; }
+.tier-high     { color: #EA580C; background: #FFF7ED; }
+.tier-moderate { color: #D97706; background: #FFFBEB; }
+.tier-watch    { color: #CA8A04; background: #FEFCE8; }
+.tier-stable   { color: #16A34A; background: #F0FDF4; }
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--outline-variant); border-radius: 4px; }
+
+/* Table no-divider: use row tints instead */
+.tonal-table tr:nth-child(even) td {
+  background: rgba(242, 244, 246, 0.5);
+}

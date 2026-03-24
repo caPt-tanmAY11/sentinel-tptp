@@ -4,50 +4,88 @@ import { useParams, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine, BarChart, Bar, Cell,
+  ResponsiveContainer, ReferenceLine,
 } from 'recharts';
-import { ArrowLeft, TrendingUp, TrendingDown, Minus,
-         AlertTriangle, CheckCircle, Activity } from 'lucide-react';
 import { sentinelApi } from '@/lib/api';
 
-// ── Tier helpers ──────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 const TIER_COLOR: Record<string, string> = {
   CRITICAL: '#DC2626', HIGH: '#EA580C', MODERATE: '#D97706',
-  WATCH: '#CA8A04',    STABLE: '#16A34A',
+  WATCH: '#CA8A04', STABLE: '#16A34A',
 };
 const TIER_BG: Record<string, string> = {
   CRITICAL: '#FEF2F2', HIGH: '#FFF7ED', MODERATE: '#FFFBEB',
-  WATCH: '#FEFCE8',    STABLE: '#F0FDF4',
+  WATCH: '#FEFCE8', STABLE: '#F0FDF4',
 };
 
 function TierBadge({ label }: { label: string }) {
   return (
-    <span className="px-3 py-1 rounded-full text-sm font-bold"
+    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-bold"
       style={{ color: TIER_COLOR[label] || '#16A34A', background: TIER_BG[label] || '#F0FDF4' }}>
+      <span className="w-1.5 h-1.5 rounded-full" style={{ background: TIER_COLOR[label] || '#16A34A' }} />
       {label}
     </span>
   );
 }
 
-function DirectionIcon({ dir }: { dir: string }) {
-  if (dir === 'positive')  return <TrendingUp  className="w-3.5 h-3.5 text-red-500" />;
-  if (dir === 'negative')  return <TrendingDown className="w-3.5 h-3.5 text-green-600" />;
-  return <Minus className="w-3.5 h-3.5 text-slate-400" />;
-}
-
 const fmtInr = (v: number) =>
-  new Intl.NumberFormat('en-IN', { style:'currency', currency:'INR', maximumFractionDigits:0 }).format(v);
+  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v);
 
 const fmtTime = (iso: string) =>
-  new Date(iso).toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12:true });
+  new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
 
-// ── Severity colour ───────────────────────────────────────────────────────────
+const fmtDate = (iso: string) =>
+  new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+
 function severityColor(s: number): string {
   if (s >= 0.75) return '#DC2626';
   if (s >= 0.55) return '#EA580C';
   if (s >= 0.40) return '#D97706';
   if (s >= 0.10) return '#CA8A04';
   return '#16A34A';
+}
+
+// ── Section header ─────────────────────────────────────────────────────────────
+function SectionHeader({ icon, title, sub }: { icon: string; title: string; sub?: string }) {
+  return (
+    <div className="flex items-center gap-3 mb-5">
+      <div className="w-9 h-9 rounded-xl flex items-center justify-center"
+        style={{ background: 'linear-gradient(135deg,#2b4bb918,#4865d318)' }}>
+        <span className="material-symbols-outlined text-lg text-blue-700"
+          style={{ fontVariationSettings: "'FILL' 1" }}>{icon}</span>
+      </div>
+      <div>
+        <h3 className="font-headline font-bold text-base text-on-surface leading-tight">{title}</h3>
+        {sub && <p className="text-[10px] font-label font-bold uppercase tracking-widest text-slate-400">{sub}</p>}
+      </div>
+    </div>
+  );
+}
+
+// ── Info row ──────────────────────────────────────────────────────────────────
+function InfoRow({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
+  return (
+    <div className="flex justify-between items-center py-2.5"
+      style={{ borderBottom: '1px solid rgba(195,198,215,0.15)' }}>
+      <span className="text-xs text-slate-400 font-medium">{label}</span>
+      <span className={`text-sm font-semibold text-on-surface ${mono ? 'font-mono' : ''}`}>{value ?? '—'}</span>
+    </div>
+  );
+}
+
+// ── Loan status badge ──────────────────────────────────────────────────────────
+function LoanStatusBadge({ status }: { status: string }) {
+  const cfg: Record<string, { c: string; bg: string }> = {
+    ACTIVE:       { c: '#16A34A', bg: '#F0FDF4' },
+    CLOSED:       { c: '#64748B', bg: '#F1F5F9' },
+    NPA:          { c: '#DC2626', bg: '#FEF2F2' },
+    RESTRUCTURED: { c: '#D97706', bg: '#FFFBEB' },
+  };
+  const s = cfg[status] || cfg.CLOSED;
+  return (
+    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold"
+      style={{ color: s.c, background: s.bg }}>{status}</span>
+  );
 }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
@@ -72,119 +110,180 @@ export default function CustomerDetailPage() {
     queryFn:  () => sentinelApi.getCustomerBaseline(customerId).then(r => r.data),
   });
 
-  const events: any[] = histData?.events || [];
+  const { data: profile } = useQuery({
+    queryKey: ['profile', customerId],
+    queryFn:  () => sentinelApi.getCustomerProfile(customerId).then(r => r.data),
+  });
 
-  // Build chart data (oldest first)
+  const { data: loansData } = useQuery({
+    queryKey: ['loans', customerId],
+    queryFn:  () => sentinelApi.getCustomerLoans(customerId).then(r => r.data),
+  });
+
+  const { data: cardsData } = useQuery({
+    queryKey: ['cards', customerId],
+    queryFn:  () => sentinelApi.getCustomerCreditCards(customerId).then(r => r.data),
+  });
+
+  const { data: txnData } = useQuery({
+    queryKey: ['transactions', customerId],
+    queryFn:  () => sentinelApi.getCustomerTransactions(customerId, 50).then(r => r.data),
+    refetchInterval: 15_000,
+  });
+
+  const events: any[]  = histData?.events || [];
+  const loans: any[]   = loansData?.loans || [];
+  const cards: any[]   = cardsData?.credit_cards || [];
+  const rawTxns: any[] = txnData?.transactions || [];
+
   const chartData = [...events].reverse().map((e, i) => ({
-    idx:    i + 1,
-    score:  parseFloat((e.pulse_score_after * 100).toFixed(1)),
-    sev:    parseFloat((e.txn_severity * 100).toFixed(1)),
-    cat:    e.inferred_category,
-    dir:    e.severity_direction,
-    time:   fmtTime(e.event_ts),
-    amount: e.amount,
+    idx:   i + 1,
+    score: parseFloat((e.pulse_score_after * 100).toFixed(1)),
+    sev:   parseFloat((e.txn_severity * 100).toFixed(1)),
+    time:  fmtTime(e.event_ts),
   }));
 
-  // Top SHAP features from most recent event
   const topFeatures: any[] = events[0]?.top_features || [];
+  const riskLabel    = pulse?.risk_label ?? 'STABLE';
+  const currentScore = pulse?.pulse_score ?? 0;
 
-  const isLoading = pulseLoading || histLoading;
-
-  if (isLoading) return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50">
-      <div className="animate-spin h-8 w-8 rounded-full border-2 border-blue-500 border-t-transparent" />
+  if (pulseLoading || histLoading) return (
+    <div className="min-h-screen crystalline-bg flex items-center justify-center">
+      <div className="flex flex-col items-center gap-4">
+        <div className="animate-spin h-10 w-10 rounded-full border-2 border-blue-500 border-t-transparent" />
+        <p className="text-slate-400 text-sm font-label">Loading customer data…</p>
+      </div>
     </div>
   );
 
-  const currentScore = pulse?.pulse_score ?? 0;
-  const riskLabel    = pulse?.risk_label  ?? 'STABLE';
-
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen crystalline-bg">
 
-      {/* Header */}
-      <header className="bg-white border-b border-slate-100 px-6 py-4 flex items-center gap-4 sticky top-0 z-20 shadow-sm">
-        <button onClick={() => router.back()}
-          className="p-2 rounded-xl hover:bg-slate-100 transition text-slate-400 hover:text-slate-600">
-          <ArrowLeft className="w-5 h-5" />
-        </button>
-        <div className="flex-1">
-          <h1 className="text-base font-bold text-slate-800">Customer Detail</h1>
-          <p className="text-xs text-slate-400 font-mono">{customerId}</p>
+      {/* ── Header ── */}
+      <header className="sticky top-0 z-30"
+        style={{ background: 'rgba(247,249,251,0.85)', backdropFilter: 'blur(20px)', borderBottom: '1px solid rgba(195,198,215,0.2)' }}>
+        <div className="max-w-[1400px] mx-auto px-6 py-4 flex items-center gap-4">
+          <button onClick={() => router.back()}
+            className="p-2 rounded-xl hover:bg-white/70 transition text-slate-400 hover:text-slate-700">
+            <span className="material-symbols-outlined">arrow_back</span>
+          </button>
+          <div className="flex-1 min-w-0">
+            <h1 className="font-headline font-bold text-lg text-on-surface leading-tight truncate">
+              {profile?.full_name ?? 'Customer Detail'}
+            </h1>
+            <p className="text-xs text-slate-400 font-mono">{customerId}</p>
+          </div>
+          <TierBadge label={riskLabel} />
         </div>
-        <TierBadge label={riskLabel} />
       </header>
 
-      <main className="max-w-[1200px] mx-auto px-6 py-6 space-y-5">
+      <div className="max-w-[1400px] mx-auto px-6 py-6 space-y-5">
 
-        {/* Pulse Score Hero */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 flex flex-wrap gap-6 items-center">
+        {/* ── Row 1: Pulse hero + Customer Profile ── */}
+        <div className="grid grid-cols-12 gap-5">
 
-          {/* Gauge */}
-          <div className="flex-shrink-0 text-center">
-            <div className="relative w-36 h-36">
-              <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
-                <circle cx="60" cy="60" r="50" fill="none" stroke="#F1F5F9" strokeWidth="12" />
-                <circle cx="60" cy="60" r="50" fill="none"
-                  stroke={TIER_COLOR[riskLabel] || '#16A34A'} strokeWidth="12"
-                  strokeDasharray={`${currentScore * 314} 314`}
-                  strokeLinecap="round" className="transition-all duration-700" />
-              </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-3xl font-black text-slate-800">
-                  {(currentScore * 100).toFixed(0)}
-                </span>
-                <span className="text-xs text-slate-400 -mt-1">/ 100</span>
+          {/* Pulse Score Hero */}
+          <div className="col-span-12 lg:col-span-4 glass-card rounded-2xl p-6 ambient-shadow-sm">
+            <SectionHeader icon="monitoring" title="Pulse Score" sub="Real-time risk signal" />
+
+            {/* Gauge */}
+            <div className="flex justify-center mb-5">
+              <div className="relative w-40 h-40">
+                <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
+                  <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(0,0,0,0.06)" strokeWidth="12" />
+                  <circle cx="60" cy="60" r="52" fill="none"
+                    stroke={TIER_COLOR[riskLabel] || '#16A34A'} strokeWidth="12"
+                    strokeDasharray={`${currentScore * 326.7} 326.7`}
+                    strokeLinecap="round" className="transition-all duration-700" />
+                  <defs>
+                    <linearGradient id="scoreGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stopColor="#2b4bb9" />
+                      <stop offset="100%" stopColor="#4865d3" />
+                    </linearGradient>
+                  </defs>
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-4xl font-headline font-extrabold text-on-surface">
+                    {(currentScore * 100).toFixed(0)}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-label font-bold uppercase tracking-widest -mt-1">/ 100</span>
+                </div>
               </div>
             </div>
-            <p className="text-xs text-slate-400 mt-2">Overall Pulse Score</p>
+
+            {/* Score grid */}
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { label: 'Risk Tier',      value: <TierBadge label={riskLabel} /> },
+                { label: 'Raw Score',      value: currentScore.toFixed(5), mono: true },
+                { label: 'Events Scored',  value: (pulse?.score_count ?? 0).toLocaleString('en-IN') },
+                { label: 'Last Updated',   value: pulse?.last_updated ? fmtTime(pulse.last_updated) : '—' },
+                { label: 'Baseline Txns',  value: baseline?.transaction_count?.toLocaleString?.() ?? '—' },
+                { label: 'Confidence',     value: baseline?.low_confidence ? '⚠ Low' : '✓ High' },
+              ].map(s => (
+                <div key={s.label} className="rounded-xl p-3"
+                  style={{ background: 'rgba(242,244,246,0.7)' }}>
+                  <p className="text-[10px] text-slate-400 mb-1 font-label font-bold uppercase tracking-wide">{s.label}</p>
+                  <div className={`text-sm font-semibold text-on-surface ${(s as any).mono ? 'font-mono' : ''}`}>{s.value}</div>
+                </div>
+              ))}
+            </div>
           </div>
 
-          {/* Stats grid */}
-          <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-4">
-            {[
-              { label: 'Risk Tier',      value: <TierBadge label={riskLabel} /> },
-              { label: 'Score (raw)',    value: currentScore.toFixed(5) },
-              { label: 'Events scored', value: (pulse?.score_count ?? 0).toLocaleString('en-IN') },
-              { label: 'Last updated',  value: pulse?.last_updated ? fmtTime(pulse.last_updated) : '—' },
-              { label: 'Baseline txns', value: (baseline?.transaction_count ?? '—').toLocaleString?.() || '—' },
-              { label: 'Confidence',    value: baseline?.low_confidence ? '⚠ Low' : '✓ High' },
-              { label: 'Baseline start',value: baseline?.history_start || '—' },
-              { label: 'Baseline end',  value: baseline?.history_end   || '—' },
-            ].map(s => (
-              <div key={s.label} className="bg-slate-50 rounded-xl p-3">
-                <p className="text-xs text-slate-400 mb-1">{s.label}</p>
-                <div className="text-sm font-semibold text-slate-700">{s.value}</div>
+          {/* Customer Profile */}
+          <div className="col-span-12 lg:col-span-8 glass-card rounded-2xl p-6 ambient-shadow-sm">
+            <SectionHeader icon="person" title="Customer Profile" sub="Identity & demographics" />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8">
+              <div>
+                <InfoRow label="Full Name"          value={profile?.full_name} />
+                <InfoRow label="Date of Birth"      value={profile?.date_of_birth ? fmtDate(profile.date_of_birth) : '—'} />
+                <InfoRow label="Gender"             value={profile?.gender} />
+                <InfoRow label="PAN Number"         value={profile?.pan_number} mono />
+                <InfoRow label="Email"              value={profile?.email} />
+                <InfoRow label="Phone"              value={profile?.phone} mono />
+                <InfoRow label="City"               value={profile?.city} />
+                <InfoRow label="State"              value={profile?.state} />
+                <InfoRow label="Pincode"            value={profile?.pincode} mono />
               </div>
-            ))}
+              <div>
+                <InfoRow label="Employment Type"    value={profile?.employment_type} />
+                <InfoRow label="Employer"           value={profile?.employer_name} />
+                <InfoRow label="Monthly Income"     value={profile?.monthly_income ? fmtInr(profile.monthly_income) : '—'} />
+                <InfoRow label="Salary Day"         value={profile?.expected_salary_day ? `Day ${profile.expected_salary_day}` : '—'} />
+                <InfoRow label="Segment"            value={profile?.customer_segment} />
+                <InfoRow label="Account ID"         value={profile?.account_id} mono />
+                <InfoRow label="Account Number"     value={profile?.account_number} mono />
+                <InfoRow label="Account Type"       value={profile?.account_type} />
+                <InfoRow label="IFSC Code"          value={profile?.ifsc_code} mono />
+                <InfoRow label="UPI VPA"            value={profile?.upi_vpa} mono />
+                <InfoRow label="Credit Bureau Score" value={profile?.credit_bureau_score} />
+                <InfoRow label="Delinquency Count"  value={profile?.historical_delinquency_count} />
+                <InfoRow label="Customer Since"     value={profile?.account_open_date ? fmtDate(profile.account_open_date) : '—'} />
+                <InfoRow label="Vintage (months)"   value={profile?.customer_vintage_months} />
+                <InfoRow label="Geography Risk"     value={profile?.geography_risk_tier ? `Tier ${profile.geography_risk_tier}` : '—'} />
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Pulse Score Timeline */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-          <h2 className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2">
-            <Activity className="w-4 h-4 text-blue-500" />
-            Pulse Score Timeline
-            <span className="text-xs font-normal text-slate-400 ml-1">(last {chartData.length} transactions)</span>
-          </h2>
-
+        {/* ── Row 2: Pulse Timeline ── */}
+        <div className="glass-card rounded-2xl p-6 ambient-shadow-sm">
+          <SectionHeader icon="timeline" title="Pulse Score Timeline" sub={`Last ${chartData.length} transactions`} />
           {chartData.length === 0 ? (
             <div className="h-48 flex items-center justify-center text-slate-400 text-sm">
-              No transaction events yet. Inject some transactions to see the timeline.
+              No transaction events yet.
             </div>
           ) : (
             <ResponsiveContainer width="100%" height={220}>
               <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                <XAxis dataKey="idx" tick={{ fontSize: 11, fill: '#94A3B8' }}
-                  label={{ value: 'Transaction #', position: 'insideBottom', offset: -2, fontSize: 11, fill: '#94A3B8' }} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#94A3B8' }}
-                  tickFormatter={v => `${v}`} width={35} />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.04)" />
+                <XAxis dataKey="idx" tick={{ fontSize: 10, fill: '#94A3B8' }}
+                  label={{ value: 'Transaction #', position: 'insideBottom', offset: -2, fontSize: 10, fill: '#94A3B8' }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#94A3B8' }} width={32} />
                 <Tooltip
-                  contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #E2E8F0' }}
+                  contentStyle={{ borderRadius: 12, border: 'none', background: 'rgba(255,255,255,0.95)', boxShadow: '0 4px 24px rgba(0,0,0,0.08)', fontSize: 11 }}
                   formatter={(v: any, n: string) => [n === 'score' ? `${v}/100` : `${v}%`, n === 'score' ? 'Pulse' : 'Severity']}
                   labelFormatter={(_: any, payload: any[]) => payload?.[0]?.payload?.time || ''} />
-                {/* Tier reference lines */}
                 {[
                   { y: 75, color: '#DC2626', label: 'CRITICAL' },
                   { y: 55, color: '#EA580C', label: 'HIGH' },
@@ -192,43 +291,177 @@ export default function CustomerDetailPage() {
                   { y: 25, color: '#CA8A04', label: 'WATCH' },
                 ].map(t => (
                   <ReferenceLine key={t.label} y={t.y} stroke={t.color}
-                    strokeDasharray="4 3" strokeOpacity={0.5}
+                    strokeDasharray="4 3" strokeOpacity={0.4}
                     label={{ value: t.label, position: 'right', fontSize: 9, fill: t.color }} />
                 ))}
-                <Line type="monotone" dataKey="score" stroke="#3B82F6" strokeWidth={2.5}
-                  dot={false} activeDot={{ r: 5, fill: '#3B82F6' }} name="score" />
+                <Line type="monotone" dataKey="score" stroke="#2b4bb9" strokeWidth={2.5}
+                  dot={false} activeDot={{ r: 5, fill: '#2b4bb9' }} name="score" />
               </LineChart>
             </ResponsiveContainer>
           )}
         </div>
 
-        {/* SHAP Features + Transaction History */}
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
+        {/* ── Row 3: Loans + Credit Cards ── */}
+        <div className="grid grid-cols-12 gap-5">
 
-          {/* SHAP */}
-          <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-            <h2 className="text-sm font-bold text-slate-700 mb-4">Top Score Drivers</h2>
+          {/* Loans */}
+          <div className="col-span-12 lg:col-span-7 glass-card rounded-2xl p-6 ambient-shadow-sm">
+            <SectionHeader icon="account_balance" title="Loan Accounts" sub={`${loans.length} active loan(s)`} />
+            {loans.length === 0 ? (
+              <p className="text-slate-400 text-sm text-center py-8">No loans found for this customer.</p>
+            ) : (
+              <div className="space-y-4">
+                {loans.map((loan: any) => (
+                  <div key={loan.loan_id} className="rounded-2xl p-4"
+                    style={{ background: 'rgba(242,244,246,0.6)' }}>
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <span className="text-sm font-headline font-bold text-on-surface">{loan.loan_type} Loan</span>
+                        <p className="text-xs font-mono text-slate-400 mt-0.5">{loan.loan_account_number}</p>
+                      </div>
+                      <LoanStatusBadge status={loan.status} />
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      {[
+                        { label: 'Sanctioned',         value: fmtInr(loan.sanctioned_amount) },
+                        { label: 'Outstanding',        value: fmtInr(loan.outstanding_principal) },
+                        { label: 'EMI Amount',         value: fmtInr(loan.emi_amount) },
+                        { label: 'EMI Due Date',       value: loan.emi_due_date ? `Day ${loan.emi_due_date}` : '—' },
+                        { label: 'Interest Rate',      value: `${loan.interest_rate}% p.a.` },
+                        { label: 'Tenure',             value: `${loan.tenure_months} months` },
+                        { label: 'Remaining Tenure',   value: `${loan.remaining_tenure} months` },
+                        { label: 'Disbursement Date',  value: loan.disbursement_date ? fmtDate(loan.disbursement_date) : '—' },
+                        { label: 'Days Past Due',      value: loan.days_past_due ?? 0,       warn: loan.days_past_due > 0 },
+                        { label: 'Failed Debits (30d)',value: loan.failed_auto_debit_count_30d ?? 0, warn: loan.failed_auto_debit_count_30d > 0 },
+                      ].map(f => (
+                        <div key={f.label} className="bg-white/60 rounded-xl p-2.5">
+                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mb-1">{f.label}</p>
+                          <p className={`text-sm font-semibold ${(f as any).warn ? 'text-red-500' : 'text-on-surface'}`}>{f.value}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Repayment progress */}
+                    <div className="mt-3">
+                      <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                        <span>Repayment Progress</span>
+                        <span>{Math.round(((loan.tenure_months - loan.remaining_tenure) / loan.tenure_months) * 100)}%</span>
+                      </div>
+                      <div className="h-1.5 rounded-full" style={{ background: 'rgba(0,0,0,0.07)' }}>
+                        <div className="h-full rounded-full transition-all"
+                          style={{
+                            width: `${Math.round(((loan.tenure_months - loan.remaining_tenure) / loan.tenure_months) * 100)}%`,
+                            background: loan.days_past_due > 0 ? '#DC2626' : '#2b4bb9',
+                          }} />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Credit Cards */}
+          <div className="col-span-12 lg:col-span-5 glass-card rounded-2xl p-6 ambient-shadow-sm">
+            <SectionHeader icon="credit_card" title="Credit Cards" sub={`${cards.length} card(s)`} />
+            {cards.length === 0 ? (
+              <p className="text-slate-400 text-sm text-center py-8">No credit cards found.</p>
+            ) : (
+              <div className="space-y-4">
+                {cards.map((card: any) => {
+                  const utilPct = Math.min(100, card.credit_utilization_pct ?? 0);
+                  const utilColor = utilPct >= 90 ? '#DC2626' : utilPct >= 70 ? '#EA580C' : utilPct >= 50 ? '#D97706' : '#16A34A';
+                  return (
+                    <div key={card.card_id} className="rounded-2xl p-4 overflow-hidden relative"
+                      style={{ background: 'linear-gradient(135deg, #2b4bb9, #4865d3)' }}>
+                      {/* Card shine */}
+                      <div className="absolute -right-8 -top-8 w-32 h-32 rounded-full"
+                        style={{ background: 'rgba(255,255,255,0.08)' }} />
+                      <div className="relative">
+                        <div className="flex items-center justify-between mb-4">
+                          <span className="material-symbols-outlined text-white/80 text-2xl"
+                            style={{ fontVariationSettings: "'FILL' 1" }}>credit_card</span>
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                            card.status === 'ACTIVE' ? 'bg-white/20 text-white' : 'bg-white/10 text-white/60'
+                          }`}>{card.status}</span>
+                        </div>
+                        <p className="text-white/60 text-[10px] font-mono mb-0.5">{card.card_account_number}</p>
+                        <p className="text-white text-lg font-headline font-bold">{fmtInr(card.credit_limit)}</p>
+                        <p className="text-white/60 text-[10px] font-bold uppercase tracking-widest mb-4">Credit Limit</p>
+                        <div className="grid grid-cols-2 gap-3 mb-3">
+                          <div>
+                            <p className="text-white/50 text-[10px] uppercase tracking-wide mb-0.5">Balance</p>
+                            <p className="text-white font-bold text-sm">{fmtInr(card.current_balance ?? 0)}</p>
+                          </div>
+                          <div>
+                            <p className="text-white/50 text-[10px] uppercase tracking-wide mb-0.5">Min Due</p>
+                            <p className={`font-bold text-sm ${!card.min_payment_made ? 'text-red-300' : 'text-white'}`}>
+                              {fmtInr(card.min_payment_due ?? 0)}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-white/50 text-[10px] uppercase tracking-wide mb-0.5">Due Date</p>
+                            <p className="text-white font-bold text-sm">{card.payment_due_date ? `Day ${card.payment_due_date}` : '—'}</p>
+                          </div>
+                          <div>
+                            <p className="text-white/50 text-[10px] uppercase tracking-wide mb-0.5">Bureau Enquiries (90d)</p>
+                            <p className={`font-bold text-sm ${(card.bureau_enquiry_count_90d ?? 0) > 3 ? 'text-red-300' : 'text-white'}`}>
+                              {card.bureau_enquiry_count_90d ?? 0}
+                            </p>
+                          </div>
+                        </div>
+                        {/* Utilization bar */}
+                        <div>
+                          <div className="flex justify-between text-[10px] text-white/60 mb-1">
+                            <span>Utilization</span>
+                            <span style={{ color: utilPct > 70 ? '#FCA5A5' : 'rgba(255,255,255,0.7)' }}>{utilPct.toFixed(1)}%</span>
+                          </div>
+                          <div className="h-1.5 rounded-full bg-white/20">
+                            <div className="h-full rounded-full transition-all"
+                              style={{ width: `${utilPct}%`, background: utilColor }} />
+                          </div>
+                        </div>
+                        {!card.min_payment_made && (
+                          <div className="mt-3 flex items-center gap-2 text-red-300 text-xs font-bold">
+                            <span className="material-symbols-outlined text-sm"
+                              style={{ fontVariationSettings: "'FILL' 1" }}>warning</span>
+                            Minimum payment not made
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── Row 4: SHAP + Pulse Events ── */}
+        <div className="grid grid-cols-12 gap-5">
+          {/* SHAP Features */}
+          <div className="col-span-12 lg:col-span-4 glass-card rounded-2xl p-6 ambient-shadow-sm">
+            <SectionHeader icon="psychology" title="Top Score Drivers" sub="SHAP feature attribution" />
             {topFeatures.length === 0 ? (
-              <p className="text-xs text-slate-400 py-6 text-center">No SHAP data yet</p>
+              <p className="text-xs text-slate-400 py-8 text-center">No SHAP data yet.</p>
             ) : (
               <div className="space-y-3">
                 {topFeatures.map((f: any, i: number) => {
-                  const isStress  = f.direction === 'stress';
-                  const barColor  = isStress ? '#DC2626' : '#16A34A';
-                  const maxAbs    = Math.max(...topFeatures.map((x: any) => Math.abs(x.shap)));
-                  const pct       = maxAbs > 0 ? (Math.abs(f.shap) / maxAbs) * 100 : 0;
+                  const isStress = f.direction === 'stress';
+                  const barColor = isStress ? '#DC2626' : '#16A34A';
+                  const maxAbs   = Math.max(...topFeatures.map((x: any) => Math.abs(x.shap)));
+                  const pct      = maxAbs > 0 ? (Math.abs(f.shap) / maxAbs) * 100 : 0;
                   return (
                     <div key={i}>
                       <div className="flex justify-between items-center mb-1">
-                        <span className="text-xs text-slate-600 truncate pr-2" title={f.feature}>
+                        <span className="text-xs text-on-surface-variant truncate pr-2" title={f.feature}>
                           {f.feature.replace(/_/g, ' ')}
                         </span>
-                        <span className="text-xs font-mono font-semibold flex-shrink-0"
+                        <span className="text-xs font-mono font-bold flex-shrink-0"
                           style={{ color: barColor }}>
                           {isStress ? '+' : ''}{f.shap.toFixed(3)}
                         </span>
                       </div>
-                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-1.5 rounded-full" style={{ background: 'rgba(0,0,0,0.06)' }}>
                         <div className="h-full rounded-full transition-all"
                           style={{ width: `${pct}%`, background: barColor }} />
                       </div>
@@ -239,66 +472,58 @@ export default function CustomerDetailPage() {
             )}
           </div>
 
-          {/* Transaction History */}
-          <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-100 shadow-sm flex flex-col">
-            <div className="px-5 py-4 border-b border-slate-100">
-              <h2 className="text-sm font-bold text-slate-700">Transaction Pulse Events</h2>
-              <p className="text-xs text-slate-400 mt-0.5">Most recent first</p>
+          {/* Pulse Events */}
+          <div className="col-span-12 lg:col-span-8 glass-card rounded-2xl ambient-shadow-sm flex flex-col">
+            <div className="px-5 py-4" style={{ borderBottom: '1px solid rgba(195,198,215,0.15)' }}>
+              <h3 className="font-headline font-bold text-base text-on-surface">Transaction Pulse Events</h3>
+              <p className="text-[10px] font-label font-bold uppercase tracking-widest text-slate-400 mt-0.5">Most recent first</p>
             </div>
             <div className="overflow-y-auto flex-1" style={{ maxHeight: 380 }}>
               {events.length === 0 ? (
-                <div className="p-6 text-center text-sm text-slate-400">
-                  No events yet. Inject transactions to see results.
-                </div>
+                <div className="p-8 text-center text-sm text-slate-400">No pulse events yet.</div>
               ) : events.map((e: any, i: number) => {
                 const isStress = e.severity_direction === 'positive';
                 const isRelief = e.severity_direction === 'negative';
                 return (
-                  <div key={i}
-                    className="px-5 py-3.5 border-b border-slate-50 flex items-start gap-3 hover:bg-slate-50 transition-colors">
-
-                    {/* Icon */}
+                  <div key={i} className="px-5 py-3.5 flex items-start gap-3 hover:bg-white/40 transition-colors"
+                    style={{ borderBottom: '1px solid rgba(195,198,215,0.1)' }}>
                     <div className={`mt-0.5 w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 ${
                       isStress ? 'bg-red-50' : isRelief ? 'bg-green-50' : 'bg-slate-100'
                     }`}>
-                      {isStress
-                        ? <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
-                        : isRelief
-                          ? <CheckCircle className="w-3.5 h-3.5 text-green-600" />
-                          : <Activity className="w-3.5 h-3.5 text-slate-400" />
-                      }
+                      <span className="material-symbols-outlined text-sm"
+                        style={{
+                          color: isStress ? '#DC2626' : isRelief ? '#16A34A' : '#94A3B8',
+                          fontVariationSettings: "'FILL' 1",
+                        }}>
+                        {isStress ? 'trending_up' : isRelief ? 'trending_down' : 'remove'}
+                      </span>
                     </div>
-
-                    {/* Content */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs font-semibold text-slate-700">
+                        <span className="text-xs font-semibold text-on-surface">
                           {e.inferred_category.replace(/_/g, ' ')}
                         </span>
-                        <span className="text-xs px-1.5 py-0.5 rounded font-mono"
-                          style={{
-                            background: `${severityColor(e.txn_severity)}15`,
-                            color: severityColor(e.txn_severity),
-                          }}>
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded font-bold"
+                          style={{ background: `${severityColor(e.txn_severity)}15`, color: severityColor(e.txn_severity) }}>
                           sev {e.txn_severity.toFixed(3)}
                         </span>
-                        <span className={`text-xs font-mono ${
-                          e.delta_applied > 0 ? 'text-red-500' :
-                          e.delta_applied < 0 ? 'text-green-600' : 'text-slate-400'
+                        <span className={`text-[10px] font-mono font-bold ${
+                          e.delta_applied > 0 ? 'text-red-500' : e.delta_applied < 0 ? 'text-green-600' : 'text-slate-400'
                         }`}>
                           {e.delta_applied > 0 ? '+' : ''}{e.delta_applied.toFixed(4)}
                         </span>
                       </div>
-                      <div className="flex items-center gap-3 mt-0.5">
-                        <span className="text-xs text-slate-500">
-                          {fmtInr(e.amount)} · {e.platform}
-                        </span>
-                        <span className="text-xs text-slate-400">{fmtTime(e.event_ts)}</span>
+                      <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-400">
+                        <span>{fmtInr(e.amount)} · {e.platform}</span>
+                        <span>{fmtTime(e.event_ts)}</span>
                       </div>
-                      <div className="flex items-center gap-1 mt-1 text-xs text-slate-400">
-                        <span>{e.pulse_score_before.toFixed(3)}</span>
-                        <DirectionIcon dir={e.severity_direction} />
-                        <span className="font-semibold" style={{ color: severityColor(e.pulse_score_after) }}>
+                      <div className="flex items-center gap-1 mt-1 text-xs">
+                        <span className="text-slate-400 font-mono">{e.pulse_score_before.toFixed(3)}</span>
+                        <span className="material-symbols-outlined text-sm text-slate-300">
+                          {isStress ? 'trending_up' : isRelief ? 'trending_down' : 'remove'}
+                        </span>
+                        <span className="font-mono font-bold"
+                          style={{ color: severityColor(e.pulse_score_after) }}>
                           {e.pulse_score_after.toFixed(3)}
                         </span>
                       </div>
@@ -310,7 +535,65 @@ export default function CustomerDetailPage() {
           </div>
         </div>
 
-      </main>
+        {/* ── Row 5: Raw Transactions ── */}
+        <div className="glass-card rounded-2xl ambient-shadow-sm">
+          <div className="px-6 py-5" style={{ borderBottom: '1px solid rgba(195,198,215,0.15)' }}>
+            <SectionHeader icon="receipt_long" title="Transaction History" sub={`Last ${rawTxns.length} transactions (raw)`} />
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm tonal-table">
+              <thead>
+                <tr style={{ background: 'rgba(242,244,246,0.6)' }}>
+                  {['Date & Time', 'Amount', 'Platform', 'Status', 'Sender', 'Receiver', 'Bal Before', 'Bal After', 'Reference'].map(h => (
+                    <th key={h} className="px-4 py-3 text-left text-[10px] font-label font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rawTxns.length === 0 ? (
+                  <tr><td colSpan={9} className="text-center py-12 text-slate-400 text-sm">No transactions found.</td></tr>
+                ) : rawTxns.map((t: any) => (
+                  <tr key={t.transaction_id} className="hover:bg-white/40 transition-colors">
+                    <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap">{fmtTime(t.txn_timestamp)}</td>
+                    <td className="px-4 py-3 font-semibold text-on-surface whitespace-nowrap">{fmtInr(t.amount)}</td>
+                    <td className="px-4 py-3">
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">{t.platform}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        t.payment_status === 'success'  ? 'bg-green-50 text-green-700' :
+                        t.payment_status === 'failed'   ? 'bg-red-50 text-red-700' :
+                        t.payment_status === 'pending'  ? 'bg-yellow-50 text-yellow-700' :
+                        'bg-slate-100 text-slate-500'
+                      }`}>{t.payment_status}</span>
+                    </td>
+                    <td className="px-4 py-3 max-w-[160px]">
+                      <p className="text-xs text-on-surface truncate">{t.sender_name || '—'}</p>
+                      <p className="text-[10px] font-mono text-slate-400 truncate">{t.sender_id || ''}</p>
+                    </td>
+                    <td className="px-4 py-3 max-w-[160px]">
+                      <p className="text-xs text-on-surface truncate">{t.receiver_name || '—'}</p>
+                      <p className="text-[10px] font-mono text-slate-400 truncate">{t.receiver_id || ''}</p>
+                    </td>
+                    <td className="px-4 py-3 text-xs font-mono text-slate-500 whitespace-nowrap">
+                      {t.balance_before != null ? fmtInr(t.balance_before) : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-xs font-mono text-slate-500 whitespace-nowrap">
+                      {t.balance_after != null ? fmtInr(t.balance_after) : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-[10px] font-mono text-slate-400 max-w-[120px] truncate">
+                      {t.reference_number || '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
     </div>
   );
 }

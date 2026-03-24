@@ -529,3 +529,223 @@ async def get_customers(
         }
     finally:
         conn.close()
+
+
+@app.get("/customer/{customer_id}/profile")
+async def get_customer_profile(customer_id: str):
+    """Returns full customer demographics, employment, and bank details."""
+    conn = _get_db()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT
+                customer_id, first_name, last_name,
+                first_name || ' ' || last_name AS full_name,
+                email, phone, date_of_birth, gender, pan_number,
+                employment_type, employer_id, employer_name,
+                monthly_income, expected_salary_day,
+                state, city, pincode, geography_risk_tier,
+                customer_segment,
+                account_id, account_number, account_type,
+                account_open_date, customer_vintage_months,
+                upi_vpa, ifsc_code, opening_balance,
+                historical_delinquency_count, credit_bureau_score,
+                created_at, updated_at
+            FROM customers
+            WHERE customer_id = %s
+        """, (customer_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+
+        return {
+            "customer_id":                str(row["customer_id"]),
+            "first_name":                 row["first_name"],
+            "last_name":                  row["last_name"],
+            "full_name":                  row["full_name"],
+            "email":                      row["email"],
+            "phone":                      row["phone"],
+            "date_of_birth":              row["date_of_birth"].isoformat() if row["date_of_birth"] else None,
+            "gender":                     row["gender"],
+            "pan_number":                 row["pan_number"],
+            "employment_type":            row["employment_type"],
+            "employer_id":                row["employer_id"],
+            "employer_name":              row["employer_name"],
+            "monthly_income":             float(row["monthly_income"]),
+            "expected_salary_day":        row["expected_salary_day"],
+            "state":                      row["state"],
+            "city":                       row["city"],
+            "pincode":                    row["pincode"],
+            "geography_risk_tier":        row["geography_risk_tier"],
+            "customer_segment":           row["customer_segment"],
+            "account_id":                 row["account_id"],
+            "account_number":             row["account_number"],
+            "account_type":               row["account_type"],
+            "account_open_date":          row["account_open_date"].isoformat() if row["account_open_date"] else None,
+            "customer_vintage_months":    row["customer_vintage_months"],
+            "upi_vpa":                    row["upi_vpa"],
+            "ifsc_code":                  row["ifsc_code"],
+            "opening_balance":            float(row["opening_balance"]) if row["opening_balance"] else 0,
+            "historical_delinquency_count": row["historical_delinquency_count"],
+            "credit_bureau_score":        row["credit_bureau_score"],
+            "created_at":                 row["created_at"].isoformat() if row["created_at"] else None,
+            "updated_at":                 row["updated_at"].isoformat() if row["updated_at"] else None,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/customer/{customer_id}/loans")
+async def get_customer_loans(customer_id: str):
+    """Returns all loans for a customer."""
+    conn = _get_db()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Verify customer exists
+        cursor.execute("SELECT customer_id FROM customers WHERE customer_id = %s", (customer_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+
+        cursor.execute("""
+            SELECT
+                loan_id, loan_account_number, loan_type,
+                sanctioned_amount, outstanding_principal,
+                emi_amount, emi_due_date, interest_rate,
+                tenure_months, remaining_tenure, disbursement_date,
+                days_past_due, failed_auto_debit_count_30d,
+                status, created_at, updated_at
+            FROM loans
+            WHERE customer_id = %s
+            ORDER BY disbursement_date DESC
+        """, (customer_id,))
+        rows = cursor.fetchall()
+
+        return {
+            "customer_id": customer_id,
+            "total": len(rows),
+            "loans": [
+                {
+                    "loan_id":                    str(r["loan_id"]),
+                    "loan_account_number":        r["loan_account_number"],
+                    "loan_type":                  r["loan_type"],
+                    "sanctioned_amount":          float(r["sanctioned_amount"]),
+                    "outstanding_principal":      float(r["outstanding_principal"]),
+                    "emi_amount":                 float(r["emi_amount"]),
+                    "emi_due_date":               r["emi_due_date"],
+                    "interest_rate":              float(r["interest_rate"]),
+                    "tenure_months":              r["tenure_months"],
+                    "remaining_tenure":           r["remaining_tenure"],
+                    "disbursement_date":          r["disbursement_date"].isoformat() if r["disbursement_date"] else None,
+                    "days_past_due":              r["days_past_due"],
+                    "failed_auto_debit_count_30d": r["failed_auto_debit_count_30d"],
+                    "status":                     r["status"],
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/customer/{customer_id}/credit_cards")
+async def get_customer_credit_cards(customer_id: str):
+    """Returns all credit cards for a customer."""
+    conn = _get_db()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Verify customer exists
+        cursor.execute("SELECT customer_id FROM customers WHERE customer_id = %s", (customer_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+
+        cursor.execute("""
+            SELECT
+                card_id, card_account_number, credit_limit,
+                current_balance, credit_utilization_pct,
+                min_payment_due, min_payment_made,
+                bureau_enquiry_count_90d, payment_due_date,
+                status, created_at, updated_at
+            FROM credit_cards
+            WHERE customer_id = %s
+            ORDER BY created_at DESC
+        """, (customer_id,))
+        rows = cursor.fetchall()
+
+        return {
+            "customer_id": customer_id,
+            "total": len(rows),
+            "credit_cards": [
+                {
+                    "card_id":                   str(r["card_id"]),
+                    "card_account_number":       r["card_account_number"],
+                    "credit_limit":              float(r["credit_limit"]),
+                    "current_balance":           float(r["current_balance"]) if r["current_balance"] else 0,
+                    "credit_utilization_pct":    float(r["credit_utilization_pct"]) if r["credit_utilization_pct"] else 0,
+                    "min_payment_due":           float(r["min_payment_due"]) if r["min_payment_due"] else 0,
+                    "min_payment_made":          r["min_payment_made"],
+                    "bureau_enquiry_count_90d":  r["bureau_enquiry_count_90d"],
+                    "payment_due_date":          r["payment_due_date"],
+                    "status":                    r["status"],
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/customer/{customer_id}/transactions")
+async def get_customer_transactions(
+    customer_id: str,
+    limit: int = Query(default=50, le=200),
+):
+    """Returns raw transactions for a customer, most recent first."""
+    conn = _get_db()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Verify customer exists
+        cursor.execute("SELECT customer_id FROM customers WHERE customer_id = %s", (customer_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+
+        cursor.execute("""
+            SELECT
+                transaction_id, account_number,
+                sender_id, sender_name, receiver_id, receiver_name,
+                amount, platform, payment_status, reference_number,
+                balance_before, balance_after,
+                txn_timestamp
+            FROM transactions
+            WHERE customer_id = %s
+            ORDER BY txn_timestamp DESC
+            LIMIT %s
+        """, (customer_id, limit))
+        rows = cursor.fetchall()
+
+        return {
+            "customer_id": customer_id,
+            "total": len(rows),
+            "transactions": [
+                {
+                    "transaction_id":   str(r["transaction_id"]),
+                    "account_number":   r["account_number"],
+                    "sender_id":        r["sender_id"],
+                    "sender_name":      r["sender_name"],
+                    "receiver_id":      r["receiver_id"],
+                    "receiver_name":    r["receiver_name"],
+                    "amount":           float(r["amount"]),
+                    "platform":         r["platform"],
+                    "payment_status":   r["payment_status"],
+                    "reference_number": r["reference_number"],
+                    "balance_before":   float(r["balance_before"]) if r["balance_before"] is not None else None,
+                    "balance_after":    float(r["balance_after"]) if r["balance_after"] is not None else None,
+                    "txn_timestamp":    r["txn_timestamp"].isoformat(),
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        conn.close()
