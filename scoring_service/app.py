@@ -696,6 +696,63 @@ async def get_customer_credit_cards(customer_id: str):
         conn.close()
 
 
+@app.get("/transactions/live")
+async def get_live_transactions(
+    limit: int = Query(default=50, le=200),
+):
+    """
+    Returns the most recent N scored transaction events across ALL customers.
+    Designed for the real-time feed — poll every 2-3 seconds.
+    """
+    conn = _get_db()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT
+                tpe.event_id,
+                tpe.event_ts,
+                tpe.customer_id,
+                c.first_name || ' ' || c.last_name  AS customer_name,
+                tpe.amount,
+                tpe.platform,
+                tpe.payment_status,
+                tpe.receiver_id,
+                tpe.inferred_category,
+                tpe.txn_severity,
+                tpe.severity_direction,
+                tpe.delta_applied,
+                tpe.pulse_score_after
+            FROM transaction_pulse_events tpe
+            JOIN customers c ON c.customer_id = tpe.customer_id
+            ORDER BY tpe.event_ts DESC
+            LIMIT %s
+        """, (limit,))
+        rows = cursor.fetchall()
+        return {
+            "total": len(rows),
+            "transactions": [
+                {
+                    "event_id":           str(r["event_id"]),
+                    "event_ts":           r["event_ts"].isoformat(),
+                    "customer_id":        str(r["customer_id"]),
+                    "customer_name":      r["customer_name"],
+                    "amount":             float(r["amount"]),
+                    "platform":           r["platform"] or "UPI",
+                    "payment_status":     r["payment_status"] or "success",
+                    "receiver_id":        r["receiver_id"] or "",
+                    "inferred_category":  r["inferred_category"] or "GENERAL_DEBIT",
+                    "txn_severity":       float(r["txn_severity"]),
+                    "severity_direction": r["severity_direction"] or "neutral",
+                    "delta_applied":      float(r["delta_applied"]),
+                    "pulse_score_after":  float(r["pulse_score_after"]),
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        conn.close()
+
+
 @app.get("/customer/{customer_id}/transactions")
 async def get_customer_transactions(
     customer_id: str,

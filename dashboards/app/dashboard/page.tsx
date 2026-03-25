@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
@@ -84,6 +84,33 @@ export default function DashboardPage() {
     queryFn:  () => sentinelApi.getHighRisk(0.55, 20).then(r => r.data),
     refetchInterval: 30_000,
   });
+
+  const { data: liveData } = useQuery({
+    queryKey:        ['live-transactions'],
+    queryFn:         () => sentinelApi.getLiveTransactions(50).then(r => r.data),
+    refetchInterval: 2_000,
+  });
+
+  // Track which event_ids are newly arrived for flash animation
+  const prevEventIdsRef = useRef<Set<string>>(new Set());
+  const [newEventIds,   setNewEventIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!liveData?.transactions?.length) return;
+    const incoming = new Set<string>(liveData.transactions.map((t: any) => t.event_id));
+    const fresh    = new Set<string>(
+      [...incoming].filter(id => !prevEventIdsRef.current.has(id))
+    );
+    if (fresh.size > 0) {
+      setNewEventIds(fresh);
+      const timer = setTimeout(() => setNewEventIds(new Set()), 800);
+      prevEventIdsRef.current = incoming;
+      return () => clearTimeout(timer);
+    }
+    prevEventIdsRef.current = incoming;
+  }, [liveData]);
+
+  const liveTransactions: any[] = liveData?.transactions || [];
 
   const customers: any[] = custData?.customers || [];
   const totalPages = Math.ceil(customers.length / PAGE_SIZE);
@@ -496,22 +523,65 @@ export default function DashboardPage() {
           {/* ─── Customer Table (col-span-8) ─── */}
           <div className="col-span-12 lg:col-span-8 glass-card rounded-2xl ambient-shadow-sm flex flex-col">
             {/* Table toolbar */}
-            <div className="px-5 py-4 flex flex-wrap gap-3 items-center">
-              <h3 className="font-headline font-bold text-base text-on-surface flex-1 min-w-0">Customer Portfolio</h3>
-              <div className="flex gap-1.5 flex-wrap">
-                {['all','CRITICAL','HIGH','MODERATE','WATCH','STABLE'].map(tier => (
-                  <button key={tier}
-                    onClick={() => { setFilterTier(tier); setPage(0); }}
-                    className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all ${
-                      filterTier === tier
-                        ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/20'
-                        : 'text-slate-500 hover:bg-white/70'
-                    }`}
-                    style={{ background: filterTier === tier ? undefined : 'rgba(242,244,246,0.8)' }}>
-                    {tier === 'all' ? 'All' : tier}
-                  </button>
-                ))}
+            <div className="px-5 pt-4 pb-3 flex flex-col gap-3">
+              {/* Row 1: title + tier filters */}
+              <div className="flex flex-wrap gap-3 items-center">
+                <h3 className="font-headline font-bold text-base text-on-surface flex-1 min-w-0">Customer Portfolio</h3>
+                <div className="flex gap-1.5 flex-wrap">
+                  {['all','CRITICAL','HIGH','MODERATE','WATCH','STABLE'].map(tier => (
+                    <button key={tier}
+                      onClick={() => { setFilterTier(tier); setPage(0); }}
+                      className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all ${
+                        filterTier === tier
+                          ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/20'
+                          : 'text-slate-500 hover:bg-white/70'
+                      }`}
+                      style={{ background: filterTier === tier ? undefined : 'rgba(242,244,246,0.8)' }}>
+                      {tier === 'all' ? 'All' : tier}
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              {/* Row 2: search bar */}
+              <div className="relative">
+                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                  style={{ fontSize: '18px' }}>
+                  person_search
+                </span>
+                <input
+                  value={search}
+                  onChange={e => { setSearch(e.target.value); setPage(0); }}
+                  placeholder="Search by customer name or UUID…"
+                  className="w-full rounded-xl pl-10 pr-10 py-2.5 text-sm outline-none transition-all"
+                  style={{
+                    background: 'rgba(242,244,246,0.9)',
+                    border: '1px solid rgba(195,198,215,0.3)',
+                    color: 'var(--color-text-primary)',
+                  }}
+                />
+                {search && (
+                  <button
+                    onClick={() => { setSearch(''); setPage(0); }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                    aria-label="Clear search"
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>close</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Row 3: result count hint (only when searching) */}
+              {search && (
+                <p className="text-[11px] text-slate-400 -mt-1">
+                  {custsLoading
+                    ? 'Searching…'
+                    : customers.length === 0
+                      ? 'No customers match your search.'
+                      : `${customers.length.toLocaleString('en-IN')} result${customers.length !== 1 ? 's' : ''} for "${search}"`
+                  }
+                </p>
+              )}
             </div>
 
             {/* Table */}
@@ -589,6 +659,199 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
+
+        {/* ── Live Transaction Feed ── */}
+        <section className="mt-6 glass-card rounded-2xl ambient-shadow-sm overflow-hidden">
+
+          {/* Section header */}
+          <div className="px-6 py-4 flex items-center justify-between"
+            style={{ borderBottom: '1px solid rgba(195,198,215,0.2)' }}>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+                </span>
+                <span className="text-[10px] font-label font-bold uppercase tracking-widest text-emerald-600">Live</span>
+              </div>
+              <h3 className="font-headline font-bold text-base text-on-surface">Transaction Feed</h3>
+              <span className="text-[10px] text-slate-400 font-medium">
+                {liveTransactions.length > 0
+                  ? `${liveTransactions.length} scored events · refreshes every 2s`
+                  : 'Waiting for transactions…'}
+              </span>
+            </div>
+
+            {/* Category legend */}
+            <div className="hidden md:flex items-center gap-4 text-[10px] font-bold uppercase tracking-wide">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-red-500" />
+                <span className="text-slate-400">Stress</span>
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                <span className="text-slate-400">Relief</span>
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-slate-300" />
+                <span className="text-slate-400">Neutral</span>
+              </span>
+            </div>
+          </div>
+
+          {/* Column headers */}
+          <div className="grid px-6 py-2 text-[10px] font-label font-bold uppercase tracking-widest text-slate-400"
+            style={{
+              gridTemplateColumns: '90px 70px 68px 110px 1fr 160px 90px 80px 88px',
+              background: 'rgba(242,244,246,0.5)',
+              borderBottom: '1px solid rgba(195,198,215,0.15)',
+            }}>
+            <span>Time</span>
+            <span>Platform</span>
+            <span>Status</span>
+            <span>Amount</span>
+            <span>Merchant / VPA</span>
+            <span>Customer</span>
+            <span>Category</span>
+            <span>Severity</span>
+            <span>Pulse Δ</span>
+          </div>
+
+          {/* Scrollable rows */}
+          <div className="overflow-y-auto" style={{ maxHeight: '420px' }}>
+            {liveTransactions.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-400">
+                <span className="material-symbols-outlined text-4xl" style={{ opacity: 0.3 }}>
+                  sync
+                </span>
+                <p className="text-sm">No scored transactions yet.</p>
+                <p className="text-xs">
+                  Run the injector: <code className="bg-slate-100 px-2 py-0.5 rounded text-xs text-slate-600">
+                    python data_generator/realtime_injector.py --mode stress --total 50 --tps 2
+                  </code>
+                </p>
+              </div>
+            ) : (
+              liveTransactions.map((txn: any) => {
+                const isNew    = newEventIds.has(txn.event_id);
+                const isStress = txn.severity_direction === 'positive';
+                const isRelief = txn.severity_direction === 'negative';
+                const isFailed = txn.payment_status === 'failed' || txn.payment_status === 'reversed';
+
+                const categoryColor = isStress
+                  ? { bg: '#FEF2F2', text: '#DC2626', dot: '#EF4444' }
+                  : isRelief
+                  ? { bg: '#F0FDF4', text: '#16A34A', dot: '#22C55E' }
+                  : { bg: 'rgba(242,244,246,0.9)', text: '#64748B', dot: '#94A3B8' };
+
+                const deltaSign  = txn.delta_applied > 0 ? '+' : txn.delta_applied < 0 ? '' : '±';
+                const deltaColor = txn.delta_applied > 0.01 ? '#DC2626' : txn.delta_applied < -0.01 ? '#16A34A' : '#94A3B8';
+
+                const timeStr = new Date(txn.event_ts).toLocaleTimeString('en-IN', {
+                  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+                });
+
+                const platformColors: Record<string, { bg: string; text: string }> = {
+                  UPI:    { bg: '#EFF6FF', text: '#1D4ED8' },
+                  NEFT:   { bg: '#F0FDF4', text: '#166534' },
+                  NACH:   { bg: '#FFF7ED', text: '#9A3412' },
+                  IMPS:   { bg: '#FAF5FF', text: '#6B21A8' },
+                  ATM:    { bg: '#F8FAFC', text: '#475569' },
+                  RTGS:   { bg: '#ECFDF5', text: '#065F46' },
+                  BBPS:   { bg: '#FDF4FF', text: '#86198F' },
+                };
+                const pColor = platformColors[txn.platform] || { bg: '#F8FAFC', text: '#475569' };
+
+                const catShort: Record<string, string> = {
+                  SALARY_CREDIT:     'SALARY',
+                  EMI_DEBIT:         'EMI',
+                  FAILED_EMI_DEBIT:  'FAILED EMI',
+                  LENDING_APP_DEBIT: 'LENDING',
+                  LENDING_APP_CREDIT:'LOAN IN',
+                  UTILITY_PAYMENT:   'UTILITY',
+                  GROCERY:           'GROCERY',
+                  FOOD_DELIVERY:     'FOOD',
+                  FUEL:              'FUEL',
+                  OTT:               'OTT',
+                  ECOMMERCE:         'E-COMM',
+                  ATM_WITHDRAWAL:    'ATM',
+                  GENERAL_DEBIT:     'GENERAL',
+                  GENERAL_CREDIT:    'CREDIT',
+                };
+
+                return (
+                  <div
+                    key={txn.event_id}
+                    onClick={() => router.push(`/dashboard/${txn.customer_id}`)}
+                    className="grid px-6 py-2.5 cursor-pointer hover:bg-white/60 transition-all duration-150 group items-center"
+                    style={{
+                      gridTemplateColumns: '90px 70px 68px 110px 1fr 160px 90px 80px 88px',
+                      borderBottom: '1px solid rgba(195,198,215,0.1)',
+                      background: isNew ? 'rgba(236,253,245,0.6)' : undefined,
+                      transition: 'background 0.6s ease',
+                    }}
+                  >
+                    {/* Time */}
+                    <span className="font-mono text-[11px] text-slate-400">{timeStr}</span>
+
+                    {/* Platform badge */}
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold w-fit"
+                      style={{ background: pColor.bg, color: pColor.text }}>
+                      {txn.platform}
+                    </span>
+
+                    {/* Status */}
+                    <span className={`text-[10px] font-bold ${isFailed ? 'text-red-500' : 'text-emerald-600'}`}>
+                      {isFailed ? '✕ failed' : '✓ ok'}
+                    </span>
+
+                    {/* Amount */}
+                    <span className="font-mono text-[12px] font-semibold text-on-surface">
+                      ₹{txn.amount.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    </span>
+
+                    {/* Merchant / VPA */}
+                    <span className="text-[11px] text-slate-500 truncate pr-4 font-mono group-hover:text-slate-700">
+                      {txn.receiver_id || '—'}
+                    </span>
+
+                    {/* Customer name */}
+                    <span className="text-[11px] font-semibold text-on-surface truncate group-hover:text-blue-600">
+                      {txn.customer_name}
+                    </span>
+
+                    {/* Category badge */}
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold w-fit"
+                      style={{ background: categoryColor.bg, color: categoryColor.text }}>
+                      <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: categoryColor.dot }} />
+                      {catShort[txn.inferred_category] || txn.inferred_category}
+                    </span>
+
+                    {/* Severity bar */}
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-10 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(0,0,0,0.08)' }}>
+                        <div className="h-full rounded-full"
+                          style={{
+                            width: `${Math.round(txn.txn_severity * 100)}%`,
+                            background: txn.txn_severity > 0.7 ? '#DC2626' : txn.txn_severity > 0.4 ? '#F59E0B' : '#94A3B8',
+                          }} />
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400">
+                        {txn.txn_severity.toFixed(2)}
+                      </span>
+                    </div>
+
+                    {/* Delta */}
+                    <span className="font-mono text-[11px] font-bold"
+                      style={{ color: deltaColor }}>
+                      {deltaSign}{txn.delta_applied.toFixed(3)}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </section>
 
         {/* Footer */}
         <footer className="w-full py-12 mt-12" style={{ borderTop: '1px solid rgba(195,198,215,0.2)' }}>

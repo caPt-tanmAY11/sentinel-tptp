@@ -57,6 +57,9 @@ export const sentinelApi = {
   getHighRisk: (minScore = 0.55, limit = 20) =>
     api.get('/scores/high_risk', { params: { min_score: minScore, limit } }),
 
+  getLiveTransactions: (limit = 50) =>
+    api.get('/transactions/live', { params: { limit } }),
+
   getHealth: () =>
     api.get('/health'),
 };
