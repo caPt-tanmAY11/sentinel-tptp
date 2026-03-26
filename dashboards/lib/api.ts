@@ -1,8 +1,13 @@
 import axios from 'axios';
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+const NEXT_BASE = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
 
+// For FastAPI backend calls
 export const api = axios.create({ baseURL: BASE, timeout: 15_000 });
+
+// For Next.js internal API route calls (nodemailer lives here)
+export const nextApi = axios.create({ baseURL: NEXT_BASE, timeout: 15_000 });
 
 api.interceptors.request.use(cfg => {
   if (typeof window !== 'undefined') {
@@ -67,7 +72,7 @@ export const sentinelApi = {
     api.get('/interventions/pending'),
 
   processInterventions: () =>
-    api.post('/api/interventions/process'),
+    nextApi.post('/api/interventions/process'),
 
   createIntervention: (customerId: string, riskTier: string, interventionId?: string) =>
     api.post('/interventions', { customer_id: customerId, risk_tier: riskTier, intervention_id: interventionId }),
@@ -77,4 +82,7 @@ export const sentinelApi = {
 
   getHealth: () =>
     api.get('/health'),
+
+  sendInterventionEmail: (customer: { customer_id: string; first_name: string; last_name: string; risk_tier: string }) =>
+    nextApi.post('/api/interventions/send', customer),
 };
