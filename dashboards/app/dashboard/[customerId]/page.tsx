@@ -147,8 +147,12 @@ export default function CustomerDetailPage() {
   const riskLabel    = pulse?.risk_label ?? 'STABLE';
   const currentScore = pulse?.pulse_score ?? 0;
 
+  const baselineScore = chartData.length > 0
+    ? chartData.reduce((acc, d) => acc + d.score, 0) / chartData.length
+    : undefined;
+
   if (pulseLoading || histLoading) return (
-    <div className="min-h-screen crystalline-bg flex items-center justify-center">
+    <div className="flex items-center justify-center py-20">
       <div className="flex flex-col items-center gap-4">
         <div className="animate-spin h-10 w-10 rounded-full border-2 border-blue-500 border-t-transparent" />
         <p className="text-slate-400 text-sm font-label">Loading customer data…</p>
@@ -157,7 +161,7 @@ export default function CustomerDetailPage() {
   );
 
   return (
-    <div className="min-h-screen crystalline-bg">
+    <div>
 
       {/* ── Header ── */}
       <header className="sticky top-0 z-30"
@@ -294,6 +298,12 @@ export default function CustomerDetailPage() {
                     strokeDasharray="4 3" strokeOpacity={0.4}
                     label={{ value: t.label, position: 'right', fontSize: 9, fill: t.color }} />
                 ))}
+                
+                {baselineScore !== undefined && (
+                  <ReferenceLine y={baselineScore} stroke="#475569" strokeWidth={2} strokeDasharray="3 3"
+                    label={{ value: 'BASELINE AVG', position: 'insideTopLeft', fontSize: 10, fill: '#475569', fontWeight: 'bold' }} />
+                )}
+
                 <Line type="monotone" dataKey="score" stroke="#2b4bb9" strokeWidth={2.5}
                   dot={false} activeDot={{ r: 5, fill: '#2b4bb9' }} name="score" />
               </LineChart>

@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import time
 import uuid
+import threading
+import requests
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
@@ -156,6 +158,18 @@ class PulseEngine:
             ))
             conn.commit()
             cursor.close()
+
+            # Trigger automatic intervention processing asynchronously
+            # This allows the Next.js frontend to automatically send emails for pending interventions
+            def trigger_interventions_webhook():
+                try:
+                    requests.post("http://localhost:3000/api/interventions/process", timeout=3)
+                except Exception:
+                    pass
+            
+            # Fire and forget if it hits HIGH or CRITICAL
+            if tier_info["tier"] <= 2:
+                threading.Thread(target=trigger_interventions_webhook, daemon=True).start()
 
             return {
                 "event_id":              event_id,

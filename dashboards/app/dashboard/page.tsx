@@ -31,30 +31,11 @@ function TierBadge({ label }: { label: string }) {
 const fmtInr = (v: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v);
 
-// ── Sidebar nav item ──────────────────────────────────────────────────────────
-function NavItem({ icon, label, active, onClick }: {
-  icon: string; label: string; active?: boolean; onClick?: () => void;
-}) {
-  return (
-    <button onClick={onClick}
-      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm transition-all duration-200 ${
-        active
-          ? 'bg-white/80 text-blue-700 font-bold ambient-shadow-sm'
-          : 'text-slate-500 hover:bg-white/50 hover:translate-x-0.5'
-      }`}>
-      <span className="material-symbols-outlined text-xl"
-        style={{ fontVariationSettings: active ? "'FILL' 1" : "'FILL' 0" }}>
-        {icon}
-      </span>
-      <span className="font-label">{label}</span>
-    </button>
-  );
-}
+
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const router    = useRouter();
-  const logout    = useAuthStore(s => s.logout);
   const fullName  = useAuthStore(s => s.fullName);
 
   const [search,     setSearch]     = useState('');
@@ -187,72 +168,13 @@ export default function DashboardPage() {
     return { label: 'Low Density', tag: 'NORMAL' };
   })();
 
-  const handleLogout = () => { logout(); router.push('/login'); };
 
-  // Pulse ring SVG
   const pulseOffset = 552.92 - (systemPulse / 100) * 552.92;
 
   return (
-    <div className="flex min-h-screen crystalline-bg">
+    <div className="p-8">
 
-      {/* ── Sidebar ── */}
-      <aside className="sidebar-glass h-screen w-64 fixed left-0 top-0 z-40 flex flex-col p-4 gap-2"
-        style={{ background: 'linear-gradient(to bottom, rgba(247,249,251,0.5), rgba(242,244,246,0.5))' }}>
-        {/* Brand */}
-        <div className="flex items-center gap-3 px-2 mb-8 mt-2">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white"
-            style={{ background: 'linear-gradient(135deg, #2b4bb9, #4865d3)' }}>
-            <span className="material-symbols-outlined text-xl"
-              style={{ fontVariationSettings: "'FILL' 1" }}>security</span>
-          </div>
-          <div>
-            <h1 className="font-headline font-extrabold tracking-tighter text-blue-800 text-lg leading-tight">Sentinel AI</h1>
-            <p className="text-[10px] font-label uppercase tracking-widest text-slate-400">Institutional Risk</p>
-          </div>
-        </div>
-
-        {/* Nav */}
-        <nav className="flex-1 space-y-1">
-          <NavItem icon="dashboard"   label="Overview"       active />
-          <NavItem icon="security"    label="Risk Monitoring" />
-          <NavItem icon="insights"    label="Pulse Scores"   />
-          <NavItem icon="bolt"        label="Interventions"  />
-          <NavItem icon="assessment"  label="Reports"        />
-        </nav>
-
-        {/* System status */}
-        <div className="pt-4 space-y-1" style={{ borderTop: '1px solid rgba(195,198,215,0.2)' }}>
-          <div className="px-4 py-2">
-            <div className="flex items-center gap-2 text-[10px] font-bold text-[#005a82] bg-[#e4f2ff] px-2.5 py-1 rounded-full w-fit">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#005a82] animate-pulse" />
-              System Status: Normal
-            </div>
-          </div>
-          <NavItem icon="help"   label="Support" />
-          <button onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm text-slate-500 hover:bg-white/50 transition-all">
-            <span className="material-symbols-outlined text-xl">logout</span>
-            <span className="font-label">Sign Out</span>
-          </button>
-        </div>
-
-        {/* User */}
-        <div className="flex items-center gap-3 px-2 pt-3 mt-1" style={{ borderTop: '1px solid rgba(195,198,215,0.2)' }}>
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-blue-700 flex items-center justify-center text-white text-xs font-bold">
-            {fullName?.[0] ?? 'A'}
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs font-semibold text-on-surface truncate">{fullName}</p>
-            <p className="text-[10px] text-slate-400">Credit Officer</p>
-          </div>
-        </div>
-      </aside>
-
-      {/* ── Main Content ── */}
-      <main className="ml-64 flex-1 p-8">
-
-        {/* Top App Bar */}
-        <header className="flex justify-between items-center mb-10">
+        <header className="flex justify-between items-center mb-6">
           <div className="space-y-1">
             <h2 className="text-3xl font-headline font-extrabold tracking-tight text-on-surface">
               Risk Operations Center
@@ -282,6 +204,29 @@ export default function DashboardPage() {
             </div>
           </div>
         </header>
+
+        {/* System Controls */}
+        <div className="flex gap-4 mb-8">
+          <button onClick={async () => {
+            await fetch('/api/actions', { method: 'POST', body: JSON.stringify({ action: 'start_consumer' }) });
+            alert('Consumer started.');
+          }} className="px-4 py-2 bg-slate-800 text-white text-sm font-bold rounded-xl shadow hover:bg-slate-700 transition">
+            ▶ Start Consumer
+          </button>
+          <button onClick={async () => {
+            await fetch('/api/actions', { method: 'POST', body: JSON.stringify({ action: 'start_injector' }) });
+            alert('Injector started.');
+          }} className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-xl shadow hover:bg-blue-500 transition">
+            ⚡ Start Injector
+          </button>
+          <button onClick={async () => {
+            if (!confirm('Are you sure you want to truncate all transactions?')) return;
+            await fetch('/api/actions', { method: 'POST', body: JSON.stringify({ action: 'truncate_txns' }) });
+            alert('Transactions Truncated.');
+          }} className="px-4 py-2 bg-red-600 text-white text-sm font-bold rounded-xl shadow hover:bg-red-500 transition ml-auto">
+            🗑 Truncate Transactions
+          </button>
+        </div>
 
         {/* ── Bento Grid Layout ── */}
         <div className="grid grid-cols-12 gap-6">
@@ -865,7 +810,6 @@ export default function DashboardPage() {
             </div>
           </div>
         </footer>
-      </main>
-    </div>
+      </div>
   );
 }

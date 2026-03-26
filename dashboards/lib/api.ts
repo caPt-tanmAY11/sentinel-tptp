@@ -60,6 +60,21 @@ export const sentinelApi = {
   getLiveTransactions: (limit = 50) =>
     api.get('/transactions/live', { params: { limit } }),
 
+  getInterventions: () =>
+    api.get('/interventions'),
+
+  getPendingInterventions: () =>
+    api.get('/interventions/pending'),
+
+  processInterventions: () =>
+    api.post('/api/interventions/process'),
+
+  createIntervention: (customerId: string, riskTier: string, interventionId?: string) =>
+    api.post('/interventions', { customer_id: customerId, risk_tier: riskTier, intervention_id: interventionId }),
+
+  acknowledgeIntervention: (interventionId: string) =>
+    api.post(`/interventions/${interventionId}/acknowledge`),
+
   getHealth: () =>
     api.get('/health'),
 };

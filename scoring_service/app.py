@@ -458,10 +458,13 @@ async def get_customers(
         if search:
             where_clauses.append("""(
                 LOWER(c.first_name || ' ' || c.last_name) LIKE %s
-                OR c.account_id LIKE %s
+                OR c.customer_id::text ILIKE %s
+                OR c.account_id ILIKE %s
+                OR c.account_number ILIKE %s
             )""")
-            pattern = f"%{search.lower()}%"
-            params.extend([pattern, pattern.upper()])
+            pattern_lower = f"%{search.lower()}%"
+            pattern_ilike = f"%{search}%"
+            params.extend([pattern_lower, pattern_ilike, pattern_ilike, pattern_ilike])
 
         where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
@@ -590,6 +593,145 @@ async def get_customer_profile(customer_id: str):
             "credit_bureau_score":        row["credit_bureau_score"],
             "created_at":                 row["created_at"].isoformat() if row["created_at"] else None,
             "updated_at":                 row["updated_at"].isoformat() if row["updated_at"] else None,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/interventions/pending")
+async def get_pending_interventions():
+    """
+    Returns customers in HIGH or CRITICAL risk tier who have NOT received
+    an intervention email in the current calendar week.
+    """
+    conn = _get_db()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        # Find high-risk customers, exclude those who are in the interventions table with sent_at in the last 7 days (or current week)
+        cursor.execute("""
+            SELECT ps.customer_id, c.first_name, c.last_name, c.email, ps.risk_tier, ps.risk_label
+            FROM (
+                SELECT DISTINCT ON (customer_id) customer_id, risk_tier, risk_label, score_ts
+                FROM pulse_scores
+                ORDER BY customer_id, score_ts DESC
+            ) ps
+            JOIN customers c ON c.customer_id = ps.customer_id
+            WHERE ps.risk_tier <= 2
+            AND NOT EXISTS (
+                SELECT 1
+                FROM interventions i
+                WHERE i.customer_id = ps.customer_id
+                  AND i.sent_at >= NOW() - INTERVAL '7 days'
+            )
+        """)
+        rows = cursor.fetchall()
+        return {
+            "total": len(rows),
+            "pending": [
+                {
+                    "customer_id": str(r["customer_id"]),
+                    "first_name": r["first_name"],
+                    "last_name": r["last_name"],
+                    "email": r["email"],
+                    "risk_tier": r["risk_tier"],
+                    "risk_label": r["risk_label"],
+                }
+                for r in rows
+            ]
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/interventions")
+async def create_intervention(payload: dict):
+    """
+    Record that an intervention email has been sent.
+    Payload: {"customer_id": "uuid", "risk_tier": "HIGH"}
+    """
+    customer_id = payload.get("customer_id")
+    risk_tier = payload.get("risk_tier")
+    intervention_id = payload.get("intervention_id")
+    
+    if not customer_id or not risk_tier:
+        raise HTTPException(status_code=400, detail="Missing customer_id or risk_tier")
+
+    conn = _get_db()
+    try:
+        cursor = conn.cursor()
+        if intervention_id:
+            cursor.execute("""
+                INSERT INTO interventions (intervention_id, customer_id, risk_tier, status)
+                VALUES (%s, %s, %s, 'SENT')
+                RETURNING intervention_id
+            """, (intervention_id, customer_id, risk_tier))
+        else:
+            cursor.execute("""
+                INSERT INTO interventions (customer_id, risk_tier, status)
+                VALUES (%s, %s, 'SENT')
+                RETURNING intervention_id
+            """, (customer_id, risk_tier))
+            
+        final_id = cursor.fetchone()[0]
+        conn.commit()
+        return {"intervention_id": str(final_id), "status": "SENT"}
+    finally:
+        conn.close()
+
+
+@app.post("/interventions/{intervention_id}/acknowledge")
+async def acknowledge_intervention(intervention_id: str):
+    """
+    Mark an intervention as acknowledged by the customer.
+    """
+    conn = _get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE interventions
+            SET status = 'ACKNOWLEDGED', acknowledged_at = NOW()
+            WHERE intervention_id = %s
+            RETURNING intervention_id
+        """, (intervention_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Intervention not found")
+        conn.commit()
+        return {"status": "ACKNOWLEDGED"}
+    finally:
+        conn.close()
+
+
+@app.get("/interventions")
+async def get_interventions():
+    """
+    Get all sent interventions for the dashboard.
+    """
+    conn = _get_db()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT i.intervention_id, i.customer_id, c.first_name, c.last_name, 
+                   i.risk_tier, i.sent_at, i.status, i.acknowledged_at
+            FROM interventions i
+            JOIN customers c ON c.customer_id = i.customer_id
+            ORDER BY i.sent_at DESC
+        """)
+        rows = cursor.fetchall()
+        return {
+            "total": len(rows),
+            "interventions": [
+                {
+                    "intervention_id": str(r["intervention_id"]),
+                    "customer_id": str(r["customer_id"]),
+                    "customer_name": f'{r["first_name"]} {r["last_name"]}',
+                    "risk_tier": r["risk_tier"],
+                    "sent_at": r["sent_at"].isoformat() if r["sent_at"] else None,
+                    "status": r["status"],
+                    "acknowledged_at": r["acknowledged_at"].isoformat() if r["acknowledged_at"] else None
+                }
+                for r in rows
+            ]
         }
     finally:
         conn.close()

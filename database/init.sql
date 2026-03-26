@@ -325,3 +325,20 @@ CREATE TABLE IF NOT EXISTS model_monitoring (
 
 CREATE INDEX idx_monitoring_type ON model_monitoring(monitor_type);
 CREATE INDEX idx_monitoring_ts   ON model_monitoring(monitored_at DESC);
+
+
+-- =====================================================================
+-- 9. INTERVENTIONS
+-- Outbound communications sent to high-risk customers
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS interventions (
+    intervention_id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    customer_id             UUID NOT NULL REFERENCES customers(customer_id),
+    risk_tier               VARCHAR(20) NOT NULL,
+    sent_at                 TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    status                  VARCHAR(20) DEFAULT 'SENT' CHECK (status IN ('SENT', 'ACKNOWLEDGED')),
+    acknowledged_at         TIMESTAMP WITH TIME ZONE,
+    created_at              TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_interventions_customer ON interventions(customer_id);
