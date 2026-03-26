@@ -948,3 +948,115 @@ async def get_customer_transactions(
         }
     finally:
         conn.close()
+
+@app.get("/interventions/{intervention_id}/details")
+async def get_intervention_details(intervention_id: str):
+    """
+    Returns intervention details + customer info for a given intervention_id.
+    Used by the grievance submission route to identify the customer.
+    """
+    conn = _get_db()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT 
+                i.intervention_id,
+                i.customer_id,
+                i.risk_tier,
+                i.status,
+                i.sent_at,
+                c.first_name || ' ' || c.last_name AS customer_name,
+                c.email AS customer_email
+            FROM interventions i
+            JOIN customers c ON c.customer_id = i.customer_id
+            WHERE i.intervention_id = %s
+        """, (intervention_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Intervention not found")
+        return {
+            "intervention_id": str(row["intervention_id"]),
+            "customer_id":     str(row["customer_id"]),
+            "customer_name":   row["customer_name"],
+            "customer_email":  row["customer_email"],
+            "risk_tier":       row["risk_tier"],
+            "status":          row["status"],
+            "sent_at":         row["sent_at"].isoformat() if row["sent_at"] else None,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/grievances")
+async def create_grievance(payload: dict):
+    """
+    Save a customer grievance to the DB.
+    Payload: { intervention_id, customer_id, customer_name, message }
+    """
+    intervention_id = payload.get("intervention_id")
+    customer_id     = payload.get("customer_id")
+    customer_name   = payload.get("customer_name")
+    message         = payload.get("message")
+
+    if not all([intervention_id, customer_id, customer_name, message]):
+        raise HTTPException(status_code=400, detail="Missing required fields")
+
+    conn = _get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO grievances 
+                (intervention_id, customer_id, customer_name, message)
+            VALUES (%s, %s, %s, %s)
+            RETURNING grievance_id, submitted_at
+        """, (intervention_id, customer_id, customer_name, message))
+        row = cursor.fetchone()
+        conn.commit()
+        return {
+            "grievance_id":  str(row[0]),
+            "submitted_at":  row[1].isoformat(),
+            "status":        "OPEN",
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/grievances")
+async def get_grievances():
+    """
+    Returns all grievances for the dashboard, most recent first.
+    """
+    conn = _get_db()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT
+                g.grievance_id,
+                g.customer_id,
+                g.customer_name,
+                g.message,
+                g.submitted_at,
+                g.status,
+                i.risk_tier
+            FROM grievances g
+            LEFT JOIN interventions i ON i.intervention_id = g.intervention_id
+            ORDER BY g.submitted_at DESC
+        """)
+        rows = cursor.fetchall()
+        return {
+            "total": len(rows),
+            "grievances": [
+                {
+                    "grievance_id":  str(r["grievance_id"]),
+                    "customer_id":   str(r["customer_id"]),
+                    "customer_name": r["customer_name"],
+                    "message":       r["message"],
+                    "submitted_at":  r["submitted_at"].isoformat() if r["submitted_at"] else None,
+                    "status":        r["status"],
+                    "risk_tier":     r["risk_tier"],
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        conn.close()

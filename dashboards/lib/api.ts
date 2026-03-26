@@ -85,4 +85,7 @@ export const sentinelApi = {
 
   sendInterventionEmail: (customer: { customer_id: string; first_name: string; last_name: string; risk_tier: string }) =>
     nextApi.post('/api/interventions/send', customer),
+
+  getGrievances: () =>
+    api.get('/grievances'),
 };

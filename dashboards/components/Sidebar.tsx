@@ -59,7 +59,10 @@ export function Sidebar() {
         <NavItem icon="insights"    label="Pulse Scores"   />
         <NavItem icon="bolt"        label="Interventions"  href="/dashboard/interventions" active={pathname?.startsWith('/dashboard/interventions')} />
         <NavItem icon="assessment"  label="Reports"        />
+      <NavItem icon="forum" label="Grievances" href="/dashboard/grievances" active={pathname?.startsWith('/dashboard/grievances')} />
       </nav>
+
+
 
       {/* System status */}
       <div className="pt-4 space-y-1" style={{ borderTop: '1px solid rgba(195,198,215,0.2)' }}>

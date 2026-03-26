@@ -10,36 +10,37 @@ let cachedTransporter: any = null;
 
 export async function POST(req: Request) {
     // console.log('EMAIL_PASS loaded:', process.env.EMAIL_PASS ? `YES (length: ${process.env.EMAIL_PASS.length})` : 'NO - empty');
-  try {
-    const body = await req.json();
-    const { customer_id, first_name, last_name, risk_tier } = body;
+    try {
+        const body = await req.json();
+        const { customer_id, first_name, last_name, risk_tier } = body;
 
-    if (!customer_id || !first_name || !last_name || !risk_tier) {
-      return NextResponse.json(
-        { error: 'Missing required fields: customer_id, first_name, last_name, risk_tier' },
-        { status: 400 }
-      );
-    }
+        if (!customer_id || !first_name || !last_name || !risk_tier) {
+            return NextResponse.json(
+                { error: 'Missing required fields: customer_id, first_name, last_name, risk_tier' },
+                { status: 400 }
+            );
+        }
 
-    const PASS = process.env.EMAIL_PASS || '';
+        const PASS = process.env.EMAIL_PASS || '';
 
-    if (PASS && !cachedTransporter) {
-      cachedTransporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: { user: SENDER_EMAIL, pass: PASS },
-        pool: true,
-      });
-    }
+        if (PASS && !cachedTransporter) {
+            cachedTransporter = nodemailer.createTransport({
+                service: 'gmail',
+                auth: { user: SENDER_EMAIL, pass: PASS },
+                pool: true,
+            });
+        }
 
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
-    const interventionId = randomUUID();
-    const ackUrl = `${baseUrl}/api/interventions/acknowledge?id=${interventionId}`;
+        const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+        const interventionId = randomUUID();
+        const ackUrl = `${baseUrl}/api/interventions/acknowledge?id=${interventionId}`;
+        const grievanceUrl = `${baseUrl}/grievance/${interventionId}`;
 
-    const mailOptions = {
-      from: `"Sentinel AI Security" <${SENDER_EMAIL}>`,
-      to: RECEIVER_EMAIL,
-      subject: `[URGENT] Risk Tier Alert: ${risk_tier} for ${first_name} ${last_name}`,
-      html: `
+        const mailOptions = {
+            from: `"Sentinel AI Security" <${SENDER_EMAIL}>`,
+            to: RECEIVER_EMAIL,
+            subject: `[URGENT] Risk Tier Alert: ${risk_tier} for ${first_name} ${last_name}`,
+            html: `
         <!DOCTYPE html>
         <html>
           <head>
@@ -55,7 +56,8 @@ export async function POST(req: Request) {
               .highlight-box { background-color: #f1f5f9; border-left: 4px solid ${risk_tier === 'CRITICAL' ? '#ef4444' : '#f59e0b'}; padding: 20px; border-radius: 0 8px 8px 0; margin: 24px 0; }
               .highlight-box p { margin: 0; font-size: 15px; font-weight: 500; color: #0f172a; }
               .btn-container { text-align: center; margin: 40px 0 20px 0; }
-              .btn { background-color: #2563eb; color: #ffffff !important; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; font-size: 16px; }
+              .btn { background-color: #2563eb; color: #ffffff !important; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; font-size: 16px; margin: 0 8px 12px 8px; }
+.btn-secondary { background-color: #ffffff; color: #2563eb !important; padding: 13px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; font-size: 16px; border: 2px solid #2563eb; margin: 0 8px 12px 8px; }
               .footer { background-color: #f8fafc; padding: 32px 40px; border-top: 1px solid #e2e8f0; text-align: center; }
               .footer p { margin: 0 0 8px 0; font-size: 13px; color: #64748b; }
             </style>
@@ -73,9 +75,12 @@ export async function POST(req: Request) {
                   <p>Your institutional risk profile has been classified under the <strong>${risk_tier}</strong> tier based on recent transaction patterns and behavioral signals.</p>
                 </div>
                 <p>As part of our regulatory protocol, we require all high-risk profile updates to be acknowledged by the account holder. Please click the button below to acknowledge this alert.</p>
+                
                 <div class="btn-container">
-                  <a href="${ackUrl}" class="btn">Acknowledge Alert</a>
-                </div>
+                    <a href="${ackUrl}" class="btn">Acknowledge Alert</a>
+                    <a href="${grievanceUrl}" class="btn-secondary">Send Grievance</a>
+</div>
+
               </div>
               <div class="footer">
                 <p><strong>Sentinel AI Security</strong></p>
@@ -86,26 +91,26 @@ export async function POST(req: Request) {
           </body>
         </html>
       `,
-    };
+        };
 
-    // Send the email
-    if (cachedTransporter) {
-      await cachedTransporter.sendMail(mailOptions);
-    } else {
-      console.log(`[SIMULATED EMAIL] Would send to ${RECEIVER_EMAIL} for ${first_name} ${last_name}`);
+        // Send the email
+        if (cachedTransporter) {
+            await cachedTransporter.sendMail(mailOptions);
+        } else {
+            console.log(`[SIMULATED EMAIL] Would send to ${RECEIVER_EMAIL} for ${first_name} ${last_name}`);
+        }
+
+        // Only record in DB after successful send
+        await sentinelApi.createIntervention(customer_id, risk_tier, interventionId);
+
+        return NextResponse.json({
+            success: true,
+            message: `Email sent for ${first_name} ${last_name}`,
+            intervention_id: interventionId,
+        });
+
+    } catch (err: any) {
+        console.error('Failed to send intervention email:', err);
+        return NextResponse.json({ error: err.message }, { status: 500 });
     }
-
-    // Only record in DB after successful send
-    await sentinelApi.createIntervention(customer_id, risk_tier, interventionId);
-
-    return NextResponse.json({
-      success: true,
-      message: `Email sent for ${first_name} ${last_name}`,
-      intervention_id: interventionId,
-    });
-
-  } catch (err: any) {
-    console.error('Failed to send intervention email:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
-  }
 }
