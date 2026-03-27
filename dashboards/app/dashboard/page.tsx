@@ -79,6 +79,12 @@ export default function DashboardPage() {
     refetchInterval: 2_000,
   });
 
+  const { data: psiAirData } = useQuery({
+    queryKey:        ['psi-air-live'],
+    queryFn:         () => sentinelApi.getPsiAirMonitoring().then(r => r.data),
+    refetchInterval: 10_000,
+  });
+
   // Track which event_ids are newly arrived for flash animation
   const prevEventIdsRef = useRef<Set<string>>(new Set());
   const [newEventIds,   setNewEventIds] = useState<Set<string>>(new Set());
@@ -318,56 +324,85 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* ─── Behavioral Drift Analysis (col-span-8) ─── */}
+          {/* ─── PSI/AIR Live Tracking (col-span-8) ─── */}
           <div className="col-span-12 lg:col-span-8 glass-card rounded-2xl p-8 ambient-shadow-sm">
-            <div className="flex justify-between items-start mb-8">
+            <div className="flex justify-between items-start mb-6">
               <div>
-                <h3 className="font-headline font-bold text-lg text-on-surface">Behavioral Drift Analysis</h3>
-                <p className="text-xs text-slate-500 uppercase tracking-wider font-semibold">Temporal variance monitoring</p>
+                <h3 className="font-headline font-bold text-lg text-on-surface flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full" style={{background: '#16A34A', animation: 'pulse 2s infinite'}}></span>
+                  Model Monitoring Live Feed
+                </h3>
+                <p className="text-xs text-slate-500 uppercase tracking-wider font-semibold">PSI Drift & AIR Fairness Metrics</p>
               </div>
-              <div className="flex p-1 rounded-lg" style={{ background: 'rgba(242,244,246,0.8)' }}>
-                {(['Live', '1W', '1M'] as const).map(range => (
-                  <button key={range} onClick={() => setChartRange(range)}
-                    className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${
-                      chartRange === range ? 'bg-white shadow-sm text-blue-700' : 'text-slate-500'
-                    }`}>
-                    {range}
-                  </button>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4 mb-6">
+              {/* PSI Stats */}
+              <div className="p-4 rounded-xl" style={{background: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.1)'}}>
+                <h4 className="text-xs font-bold text-blue-700 uppercase mb-3">PSI Drift Monitoring</h4>
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-slate-600">Features Monitored</span>
+                    <span className="font-bold text-slate-900">{psiAirData?.psi?.length ?? 0}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-slate-600">Stable</span>
+                    <span className="font-bold text-green-700">{psiAirData?.psi?.filter((p: any) => p.psi_status === 'STABLE')?.length ?? 0}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-slate-600">Watch</span>
+                    <span className="font-bold text-amber-700">{psiAirData?.psi?.filter((p: any) => p.psi_status === 'WATCH')?.length ?? 0}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-slate-600">Retrain</span>
+                    <span className="font-bold text-red-700">{psiAirData?.psi?.filter((p: any) => p.psi_status === 'RETRAIN')?.length ?? 0}</span>
+                  </div>
+                </div>
+              </div>
+              
+              {/* AIR Stats */}
+              <div className="p-4 rounded-xl" style={{background: 'rgba(147, 51, 234, 0.05)', border: '1px solid rgba(147, 51, 234, 0.1)'}}>
+                <h4 className="text-xs font-bold text-purple-700 uppercase mb-3">AIR Fairness Audit</h4>
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-slate-600">Groups Audited</span>
+                    <span className="font-bold text-slate-900">{psiAirData?.air?.length ?? 0}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-slate-600">Fair</span>
+                    <span className="font-bold text-green-700">{psiAirData?.air?.filter((a: any) => a.air_status === 'STABLE')?.length ?? 0}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-slate-600">Alert</span>
+                    <span className="font-bold text-red-700">{psiAirData?.air?.filter((a: any) => a.air_status === 'ALERT')?.length ?? 0}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-slate-600">Last Update</span>
+                    <span className="text-xs text-slate-500">{psiAirData?.latest_update ? new Date(psiAirData.latest_update).toLocaleTimeString() : 'N/A'}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            {/* Latest Metrics Table */}
+            <div className="mt-6 pt-6" style={{borderTop: '1px solid rgba(242,244,246,0.8)'}}>
+              <h4 className="text-xs font-bold text-slate-700 uppercase mb-3">Recent Monitoring Events</h4>
+              <div className="max-h-48 overflow-y-auto space-y-2">
+                {(psiAirData?.psi ?? []).slice(0, 4).map((item: any, i: number) => (
+                  <div key={`psi-${i}`} className="flex items-center justify-between p-2 rounded text-xs" style={{background: 'rgba(242,244,246,0.5)'}}>
+                    <div className="flex-1">
+                      <div className="font-semibold text-slate-900">{item.feature_name}</div>
+                      <div className="text-slate-500">PSI: {parseFloat(item.psi_value).toFixed(4)}</div>
+                    </div>
+                    <span className="px-2 py-1 rounded-full text-xs font-bold" style={{
+                      background: item.psi_status === 'STABLE' ? 'rgba(22, 163, 74, 0.1)' : item.psi_status === 'WATCH' ? 'rgba(202, 138, 4, 0.1)' : 'rgba(220, 38, 38, 0.1)',
+                      color: item.psi_status === 'STABLE' ? '#15803d' : item.psi_status === 'WATCH' ? '#b45309' : '#b91c1c'
+                    }}>
+                      {item.psi_status}
+                    </span>
+                  </div>
                 ))}
               </div>
-            </div>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={driftChartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                  <defs>
-                    <linearGradient id="driftGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#2b4bb9" stopOpacity={0.2} />
-                      <stop offset="100%" stopColor="#2b4bb9" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.04)" />
-                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 10, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={32} />
-                  <Tooltip
-                    contentStyle={{ borderRadius: 12, border: 'none', background: 'rgba(255,255,255,0.95)', boxShadow: '0 4px 24px rgba(0,0,0,0.08)', fontSize: 11 }}
-                    formatter={(v: any) => [`${v}%`, 'Drift']} />
-                  <Area type="monotone" dataKey="drift" stroke="#2b4bb9" strokeWidth={2.5}
-                    fill="url(#driftGradient)" activeDot={{ r: 5, stroke: '#2b4bb9', fill: '#2b4bb9' }} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="grid grid-cols-4 mt-6 gap-4 pt-6" style={{ borderTop: '1px solid rgba(242,244,246,0.8)' }}>
-              {[
-                { label: 'Peak Drift', value: metricsLoading ? '…' : `${((metrics?.avg_pulse_score ?? 0) * 100 + 7).toFixed(1)}%` },
-                { label: 'Avg. Latency', value: '24ms' },
-                { label: 'Node Count', value: metricsLoading ? '…' : (metrics?.total_customers ?? 0).toLocaleString('en-IN') },
-                { label: 'Confidence', value: metricsLoading ? '…' : `${(identityPct)}%`, accent: true },
-              ].map(s => (
-                <div key={s.label}>
-                  <div className="text-xs text-slate-400 mb-1">{s.label}</div>
-                  <div className={`font-bold text-on-surface ${(s as any).accent ? 'text-[#005a82]' : ''}`}>{s.value}</div>
-                </div>
-              ))}
             </div>
           </div>
 
