@@ -1063,3 +1063,172 @@ async def get_grievances():
         }
     finally:
         conn.close()
+
+
+@app.get("/monitoring/psi-air")
+async def get_psi_air_monitoring():
+    """
+    Returns PSI (Population Stability Index) and AIR (Adverse Impact Ratio) monitoring data.
+    Includes drift detection and fairness audit metrics.
+    """
+    conn = _get_db()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Fetch PSI monitoring data
+        cursor.execute("""
+            SELECT
+                feature_name,
+                metric_value as psi_value,
+                status as psi_status,
+                monitored_at as created_at,
+                details
+            FROM model_monitoring
+            WHERE monitor_type = 'PSI'
+            ORDER BY monitored_at DESC, feature_name ASC
+            LIMIT 100
+        """)
+        psi_rows = cursor.fetchall()
+        
+        # Fetch AIR monitoring data
+        cursor.execute("""
+            SELECT
+                feature_name as air_group,
+                metric_value as air_value,
+                status as air_status,
+                monitored_at as created_at,
+                details
+            FROM model_monitoring
+            WHERE monitor_type = 'AIR'
+            ORDER BY monitored_at DESC, feature_name ASC
+            LIMIT 100
+        """)
+        air_rows = cursor.fetchall()
+        
+        # Get latest timestamp
+        cursor.execute("""
+            SELECT MAX(monitored_at) as latest_update
+            FROM model_monitoring
+        """)
+        latest = cursor.fetchone()
+        
+        return {
+            "latest_update": latest["latest_update"].isoformat() if latest["latest_update"] else None,
+            "psi": [
+                {
+                    "feature_name": r["feature_name"],
+                    "psi_value": float(r["psi_value"]),
+                    "psi_status": r["psi_status"],
+                    "created_at": r["created_at"].isoformat(),
+                    "details": r["details"] or {},
+                }
+                for r in psi_rows
+            ],
+            "air": [
+                {
+                    "air_group": r["air_group"],
+                    "air_value": float(r["air_value"]),
+                    "air_status": r["air_status"],
+                    "created_at": r["created_at"].isoformat(),
+                    "details": r["details"] or {},
+                }
+                for r in air_rows
+            ],
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/audit/full-trail")
+async def get_full_audit_trail(
+    customer_id: Optional[str] = None,
+    limit: int = Query(default=500, le=5000),
+):
+    """
+    Returns the complete audit trail of transaction pulse events.
+    Optionally filtered by customer_id. Includes all transaction details and scoring decisions.
+    """
+    conn = _get_db()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        if customer_id:
+            cursor.execute("""
+                SELECT
+                    event_id,
+                    event_ts,
+                    customer_id,
+                    amount,
+                    platform,
+                    payment_status,
+                    receiver_id,
+                    inferred_category,
+                    classifier_confidence,
+                    txn_severity,
+                    severity_direction,
+                    delta_applied,
+                    pulse_score_before,
+                    pulse_score_after,
+                    top_features,
+                    model_version,
+                    scoring_latency_ms
+                FROM transaction_pulse_events
+                WHERE customer_id = %s
+                ORDER BY event_ts DESC
+                LIMIT %s
+            """, (customer_id, limit))
+        else:
+            cursor.execute("""
+                SELECT
+                    event_id,
+                    event_ts,
+                    customer_id,
+                    amount,
+                    platform,
+                    payment_status,
+                    receiver_id,
+                    inferred_category,
+                    classifier_confidence,
+                    txn_severity,
+                    severity_direction,
+                    delta_applied,
+                    pulse_score_before,
+                    pulse_score_after,
+                    top_features,
+                    model_version,
+                    scoring_latency_ms
+                FROM transaction_pulse_events
+                ORDER BY event_ts DESC
+                LIMIT %s
+            """, (limit,))
+        
+        rows = cursor.fetchall()
+        
+        return {
+            "total": len(rows),
+            "customer_id": customer_id,
+            "audit_events": [
+                {
+                    "event_id": str(r["event_id"]),
+                    "event_ts": r["event_ts"].isoformat(),
+                    "customer_id": str(r["customer_id"]),
+                    "amount": float(r["amount"]),
+                    "platform": r["platform"],
+                    "payment_status": r["payment_status"],
+                    "receiver_id": r["receiver_id"],
+                    "inferred_category": r["inferred_category"],
+                    "classifier_confidence": float(r["classifier_confidence"]) if r["classifier_confidence"] else None,
+                    "txn_severity": float(r["txn_severity"]),
+                    "severity_direction": r["severity_direction"],
+                    "delta_applied": float(r["delta_applied"]),
+                    "pulse_score_before": float(r["pulse_score_before"]),
+                    "pulse_score_after": float(r["pulse_score_after"]),
+                    "top_features": json.loads(r["top_features"]) if isinstance(r["top_features"], str) else r["top_features"],
+                    "model_version": r["model_version"],
+                    "scoring_latency_ms": r["scoring_latency_ms"],
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        conn.close()

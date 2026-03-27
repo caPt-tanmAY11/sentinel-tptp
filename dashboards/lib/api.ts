@@ -110,4 +110,11 @@ export const sentinelApi = {
 
   getGrievances: () =>
     api.get('/grievances'),
+
+  // Monitoring & Audit endpoints
+  getPsiAirMonitoring: () =>
+    api.get('/monitoring/psi-air'),
+
+  getFullAuditTrail: (customerId?: string, limit = 500) =>
+    api.get('/audit/full-trail', { params: { customer_id: customerId, limit } }),
 };

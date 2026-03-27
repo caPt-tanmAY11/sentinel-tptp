@@ -55,10 +55,8 @@ export function Sidebar() {
       <nav className="flex-1 space-y-1">
         <NavItem icon="dashboard"   label="Overview"       href="/dashboard" active={pathname === '/dashboard'} />
         <NavItem icon="receipt_long" label="Transactions"  href="/dashboard/transactions" active={pathname?.startsWith('/dashboard/transactions')} />
-        <NavItem icon="security"    label="Risk Monitoring" />
-        <NavItem icon="insights"    label="Pulse Scores"   />
         <NavItem icon="bolt"        label="Interventions"  href="/dashboard/interventions" active={pathname?.startsWith('/dashboard/interventions')} />
-        <NavItem icon="assessment"  label="Reports"        />
+        <NavItem icon="assessment"  label="Reports"        href="/dashboard/report" active={pathname?.startsWith('/dashboard/report')} />
       <NavItem icon="forum" label="Grievances" href="/dashboard/grievances" active={pathname?.startsWith('/dashboard/grievances')} />
       </nav>
 
