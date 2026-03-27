@@ -1,0 +1,17 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# report_generator/requirements.txt
+# Additional dependencies for the Sentinel V2 Gen AI Report Generator
+#
+# Install alongside the main requirements.txt:
+#   pip install -r report_generator/requirements.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# OpenAI SDK — used to call Groq's OpenAI-compatible free API
+# Get your free Groq API key at: https://console.groq.com
+openai>=1.30.0
+
+# PDF generation — Barclays letterhead document builder
+reportlab>=4.2.0
+
+# Image processing (required by reportlab for embedded images)
+Pillow>=10.0.0

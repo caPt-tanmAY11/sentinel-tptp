@@ -65,3 +65,5 @@ joblib==1.4.0
 tqdm==4.66.2
 python-dateutil==2.9.0
 pytz==2024.1
+
+openai>=1.0.0

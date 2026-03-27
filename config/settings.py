@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     SCORING_SERVICE_PORT: int = 8001
 
+    # ── External AI APIs ─────────────────────────────────────────
+    GROQ_API_KEY: str = ""
+
     # ── Synthetic Data ───────────────────────────────────────────
     NUM_CUSTOMERS: int = 1500
 

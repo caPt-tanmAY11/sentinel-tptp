@@ -31,6 +31,8 @@ from realtime.pulse_engine import PulseEngine
 from realtime.pulse_accumulator import assign_risk_tier
 from baseline.baseline_builder import get_baseline
 
+from scoring_service.report_endpoints import report_router
+
 settings = get_settings()
 
 # ── Global state ──────────────────────────────────────────────────────────────
@@ -88,6 +90,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(report_router)
 
 # ── Response schemas ──────────────────────────────────────────────────────────
 
