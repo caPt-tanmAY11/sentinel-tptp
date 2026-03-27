@@ -220,10 +220,22 @@ export default function ReportPage() {
   const customerId     = params.customerId as string;
   const interventionId = searchParams.get("interventionId") || "";
 
+  // Relief + officer note passed via URL query params from the send route
+  const reliefRaw   = searchParams.get("relief") || "";
+  const officerNote = searchParams.get("note")   || "";
+  const selectedRelief: { id: number; title: string; description: string } | null = (() => {
+    try { return reliefRaw ? JSON.parse(decodeURIComponent(reliefRaw)) : null; }
+    catch { return null; }
+  })();
+
   const [report,       setReport]       = useState<Report | null>(null);
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState<string | null>(null);
   const [activeTab,    setActiveTab]    = useState<"report" | "transactions" | "audit">("report");
+
+  // Relief elaboration state
+  const [elaboration,        setElaboration]        = useState<string | null>(null);
+  const [elaborationLoading, setElaborationLoading] = useState(false);
 
   // Scroll-lock state
   const [hasScrolled,  setHasScrolled]  = useState(false);
@@ -244,6 +256,31 @@ export default function ReportPage() {
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [customerId]);
+
+  // ── Fetch GROQ elaboration once report + relief are both available ───
+
+  useEffect(() => {
+    if (!selectedRelief || !report) return;
+    setElaborationLoading(true);
+    fetch("/api/interventions/elaborate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        relief_title:       selectedRelief.title,
+        relief_description: selectedRelief.description,
+        officer_note:       officerNote || undefined,
+        customer_name:      report.customer.name,
+        risk_tier:          report.pulse_summary.risk_tier,
+        risk_score:         report.pulse_summary.current_score,
+        anomaly_score:      undefined,
+      }),
+    })
+      .then(r => r.json())
+      .then(d => setElaboration(d.elaboration || null))
+      .catch(() => setElaboration(null))
+      .finally(() => setElaborationLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [report]);
 
   // ── Scroll detection — unlock button when user reaches bottom ────────
 
@@ -448,6 +485,73 @@ export default function ReportPage() {
               </span>
             </div>
           </div>
+
+          {/* ── Officer Relief Section ───────────────────────────── */}
+          {selectedRelief && (
+            <div className="mb-6 rounded-xl overflow-hidden border-2 border-green-400 shadow-md">
+              {/* Section header */}
+              <div className="bg-green-700 px-5 py-3 flex items-center justify-between">
+                <div>
+                  <h3 className="text-white font-bold text-sm uppercase tracking-wider">
+                    📋 Section: Officer-Recommended Relief Measure
+                  </h3>
+                  <p className="text-green-200 text-xs mt-0.5">
+                    Personally reviewed and selected by your Credit Officer
+                  </p>
+                </div>
+                <span className="bg-green-500 text-white text-xs font-bold px-2.5 py-1 rounded-full">
+                  {selectedRelief.title}
+                </span>
+              </div>
+
+              {/* Relief summary bar */}
+              <div className="bg-green-50 border-b border-green-200 px-5 py-4">
+                <div className="flex flex-wrap items-start gap-4">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-bold text-green-700 uppercase tracking-wider mb-1">Relief Measure</p>
+                    <p className="text-sm font-semibold text-green-900">{selectedRelief.title}</p>
+                    <p className="text-sm text-green-800 mt-1 leading-relaxed">{selectedRelief.description}</p>
+                  </div>
+                  {officerNote && (
+                    <div className="flex-1 min-w-0 border-l border-green-300 pl-4">
+                      <p className="text-xs font-bold text-green-700 uppercase tracking-wider mb-1">🗒️ Officer&apos;s Note</p>
+                      <p className="text-sm text-green-800 italic leading-relaxed">&ldquo;{decodeURIComponent(officerNote)}&rdquo;</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* AI-elaborated explanation */}
+              <div className="bg-white px-5 py-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Detailed Explanation</span>
+                  <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-full">AI-Elaborated · GROQ</span>
+                </div>
+
+                {elaborationLoading && (
+                  <div className="flex items-center gap-3 text-gray-400 py-4">
+                    <svg className="animate-spin w-5 h-5 text-blue-500" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                    </svg>
+                    <span className="text-sm">Preparing your personalised explanation…</span>
+                  </div>
+                )}
+
+                {!elaborationLoading && elaboration && (
+                  <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-line">
+                    {elaboration}
+                  </div>
+                )}
+
+                {!elaborationLoading && !elaboration && (
+                  <p className="text-sm text-gray-500 italic">
+                    {selectedRelief.description}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* ── Tab Navigation ───────────────────────────────────── */}
           <div className="flex border-b border-gray-200 mb-6 overflow-x-auto">

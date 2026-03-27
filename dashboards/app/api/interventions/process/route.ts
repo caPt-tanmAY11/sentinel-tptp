@@ -3,8 +3,8 @@ import nodemailer from 'nodemailer';
 import { sentinelApi } from '@/lib/api';
 import { randomUUID } from 'crypto';
 
-const SENDER_EMAIL = 'tanmay06lko@gmail.com';
-const RECEIVER_EMAIL = 'tanmay.vishwakarma24@spit.ac.in';
+const SENDER_EMAIL = process.env.SENDER_EMAIL || 'default@example.com';
+const RECEIVER_EMAIL = process.env.RECEIVER_EMAIL || 'default@example.com';
 
 let cachedTransporter: any = null;
 

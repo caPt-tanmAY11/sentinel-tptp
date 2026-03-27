@@ -1,6 +1,8 @@
+// dashboards/lib/api.ts
+
 import axios from 'axios';
 
-const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+const BASE      = process.env.NEXT_PUBLIC_API_URL  || 'http://localhost:8001';
 const NEXT_BASE = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
 
 // For FastAPI backend calls
@@ -29,7 +31,7 @@ api.interceptors.response.use(
 );
 
 export const sentinelApi = {
-  login:              (email: string, password: string) =>
+  login: (email: string, password: string) =>
     api.post('/auth/login', { username: email, password }),
 
   getPortfolioMetrics: () =>
@@ -83,8 +85,28 @@ export const sentinelApi = {
   getHealth: () =>
     api.get('/health'),
 
-  sendInterventionEmail: (customer: { customer_id: string; first_name: string; last_name: string; risk_tier: string }) =>
-    nextApi.post('/api/interventions/send', customer),
+  // Returns 3 AI-generated relief suggestions for a customer (uses GROQ)
+  getReliefSuggestions: (customer: {
+    customer_id: string;
+    first_name: string;
+    last_name: string;
+    risk_tier: string;
+    risk_score?: number;
+    anomaly_score?: number;
+    txn_severity?: number;
+  }) =>
+    nextApi.post('/api/interventions/suggest', customer),
+
+  // Now also accepts the officer's chosen relief + optional comment
+  sendInterventionEmail: (payload: {
+    customer_id: string;
+    first_name: string;
+    last_name: string;
+    risk_tier: string;
+    selected_relief?: { id: number; title: string; description: string };
+    officer_comment?: string;
+  }) =>
+    nextApi.post('/api/interventions/send', payload),
 
   getGrievances: () =>
     api.get('/grievances'),

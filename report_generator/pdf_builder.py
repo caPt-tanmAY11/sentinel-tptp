@@ -839,3 +839,341 @@ class CustomerNoticePDFBuilder:
             ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
         ]))
         return [card, _sp(3)]
+
+# ══════════════════════════════════════════════════════════════════════════
+#  REPORT C — Audit Report PDF (Portfolio-Level Regulatory Audit)
+# ══════════════════════════════════════════════════════════════════════════
+
+def _audit_styles() -> Dict:
+    return {
+        "cover_title": ParagraphStyle(
+            "at", fontName="Helvetica-Bold", fontSize=16,
+            textColor=WHITE, alignment=TA_CENTER, leading=22, spaceAfter=6,
+        ),
+        "cover_sub": ParagraphStyle(
+            "as", fontName="Helvetica", fontSize=10,
+            textColor=B_LIGHT, alignment=TA_CENTER, spaceAfter=4,
+        ),
+        "cover_classify": ParagraphStyle(
+            "ac", fontName="Helvetica-Bold", fontSize=8,
+            textColor=B_BLUE, alignment=TA_CENTER, spaceAfter=3,
+        ),
+        "section_head": ParagraphStyle(
+            "ash", fontName="Helvetica-Bold", fontSize=9.5,
+            textColor=WHITE, backColor=B_DARK,
+            leftIndent=4, spaceBefore=10, spaceAfter=4, leading=14,
+        ),
+        "body": ParagraphStyle(
+            "ab", fontName="Helvetica", fontSize=8.5,
+            textColor=B_BLACK, alignment=TA_JUSTIFY,
+            spaceAfter=7, leading=13,
+        ),
+        "stat_label": ParagraphStyle(
+            "asl", fontName="Helvetica-Bold", fontSize=8,
+            textColor=B_DARK, spaceAfter=1,
+        ),
+        "stat_value": ParagraphStyle(
+            "asv", fontName="Helvetica", fontSize=8,
+            textColor=B_BLACK, spaceAfter=4,
+        ),
+        "ai_watermark": ParagraphStyle(
+            "aaw", fontName="Helvetica-Oblique", fontSize=7.5,
+            textColor=B_GREY, alignment=TA_CENTER, spaceAfter=3,
+        ),
+        "footer": ParagraphStyle(
+            "aft", fontName="Helvetica", fontSize=6.5,
+            textColor=B_GREY, alignment=TA_CENTER,
+        ),
+        "disclaimer": ParagraphStyle(
+            "adis", fontName="Helvetica-Oblique", fontSize=7.5,
+            textColor=B_GREY, alignment=TA_JUSTIFY,
+            spaceAfter=4, leading=11,
+        ),
+        "stamp": ParagraphStyle(
+            "ast", fontName="Helvetica-Bold", fontSize=9,
+            textColor=B_DARK, alignment=TA_CENTER,
+            spaceAfter=3, leading=13,
+        ),
+    }
+
+
+def _audit_header(canvas, doc):
+    canvas.saveState()
+    canvas.setFillColor(B_DARK)
+    canvas.rect(0, PAGE_H - 15 * mm, PAGE_W, 15 * mm, fill=1, stroke=0)
+    canvas.setFont("Helvetica-Bold", 11)
+    canvas.setFillColor(WHITE)
+    canvas.drawString(MARGIN_L, PAGE_H - 10 * mm, BANK_NAME_SHORT)
+    canvas.setFont("Helvetica", 7)
+    canvas.setFillColor(B_LIGHT)
+    canvas.drawRightString(PAGE_W - MARGIN_R, PAGE_H - 10 * mm,
+                           "AI REGULATORY COMPLIANCE AUDIT — CONFIDENTIAL")
+    canvas.setStrokeColor(B_BLUE)
+    canvas.setLineWidth(1.5)
+    canvas.line(0, PAGE_H - 16 * mm, PAGE_W, PAGE_H - 16 * mm)
+    canvas.setFont("Helvetica", 6.5)
+    canvas.setFillColor(B_GREY)
+    canvas.drawString(MARGIN_L, PAGE_H - 21 * mm,
+                      "Sentinel V2 AI Compliance System  |  GROQ / llama-3.3-70b-versatile  |  Human Review Required")
+    canvas.restoreState()
+
+
+def _audit_footer(canvas, doc):
+    canvas.saveState()
+    canvas.setStrokeColor(B_BLUE)
+    canvas.setLineWidth(0.6)
+    canvas.line(MARGIN_L, MARGIN_B - 3 * mm, PAGE_W - MARGIN_R, MARGIN_B - 3 * mm)
+    canvas.setFont("Helvetica", 6)
+    canvas.setFillColor(B_GREY)
+    canvas.drawString(MARGIN_L, MARGIN_B - 8 * mm, BANK_ADDRESS)
+    canvas.drawString(MARGIN_L, MARGIN_B - 12 * mm, BANK_REG)
+    canvas.setFont("Helvetica-Bold", 7)
+    canvas.setFillColor(B_DARK)
+    canvas.drawRightString(PAGE_W - MARGIN_R, MARGIN_B - 8 * mm, f"Page {doc.page}")
+    canvas.restoreState()
+
+
+class AuditReportPDFBuilder:
+    """Builds the Portfolio-Level AI Regulatory Compliance Audit PDF (Report C)."""
+
+    # Known section header patterns from GROQ output
+    SECTION_KEYWORDS = [
+        "EXECUTIVE SUMMARY",
+        "SYSTEM DESCRIPTION",
+        "RBI REGULATORY",
+        "GOVERNMENT OF INDIA",
+        "AI ETHICS",
+        "DATA GOVERNANCE",
+        "INTERVENTION PROCESS",
+        "FINDINGS",
+    ]
+
+    def __init__(self):
+        self.s = _audit_styles()
+
+    def build(self, report_text: str, stats: Dict[str, Any], generated_at: str) -> bytes:
+        buf = io.BytesIO()
+        doc = BaseDocTemplate(
+            buf, pagesize=A4,
+            leftMargin=MARGIN_L, rightMargin=MARGIN_R,
+            topMargin=MARGIN_T, bottomMargin=MARGIN_B,
+            title="Barclays Sentinel V2 — AI Regulatory Compliance Audit",
+            author=BANK_NAME_SHORT,
+            subject="Confidential AI Compliance Audit Record",
+        )
+        doc.addPageTemplates([
+            _page_template("audit", _audit_header, _audit_footer)
+        ])
+        doc.build(self._story(report_text, stats, generated_at))
+        return buf.getvalue()
+
+    def _story(self, report_text: str, stats: Dict, generated_at: str) -> list:
+        s     = self.s
+        story = []
+
+        # ── Cover ──────────────────────────────────────────────────────
+        story += self._cover(stats, generated_at)
+        story.append(PageBreak())
+
+        # ── Stats dashboard ────────────────────────────────────────────
+        story += self._stats_page(stats, generated_at)
+        story.append(PageBreak())
+
+        # ── Parsed sections ────────────────────────────────────────────
+        story += self._parse_and_render(report_text)
+
+        # ── End certification ──────────────────────────────────────────
+        story += self._cert_block(generated_at)
+
+        return story
+
+    def _cover(self, stats: Dict, generated_at: str) -> list:
+        s = self.s
+
+        cover_tbl = Table(
+            [
+                [_para("BARCLAYS SENTINEL V2", s["cover_title"])],
+                [_para("AI Regulatory Compliance Audit Report", s["cover_sub"])],
+                [_para("RBI · DPDPA 2023 · GOI Compliance Assessment", s["cover_sub"])],
+                [_para("STRICTLY CONFIDENTIAL — INTERNAL & REGULATORY USE ONLY",
+                       s["cover_classify"])],
+            ],
+            colWidths=["100%"],
+        )
+        cover_tbl.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), B_DARK),
+            ("TOPPADDING",    (0, 0), (-1, -1), 12),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 14),
+        ]))
+
+        dt_fmt = generated_at[:10] if generated_at else datetime.now().strftime("%Y-%m-%d")
+        meta_rows = [
+            ["Audit Type",      "Portfolio-Level AI Regulatory Compliance Audit"],
+            ["Bank",            BANK_NAME_SHORT],
+            ["AI System",       "Sentinel V2 Pre-Delinquency Intelligence Platform"],
+            ["LLM Engine",      f"GROQ / {MODEL_ID}"],
+            ["Date Generated",  dt_fmt],
+            ["Classification",  "CONFIDENTIAL — INTERNAL"],
+            ["Prepared For",    "Board Risk Committee / RBI Inspection"],
+        ]
+        lbl = ParagraphStyle("ml", fontName="Helvetica-Bold", fontSize=8, textColor=B_DARK)
+        val = ParagraphStyle("mv", fontName="Helvetica",      fontSize=8, textColor=B_BLACK)
+        meta_tbl = Table(
+            [[_para(r[0], lbl), _para(r[1], val)] for r in meta_rows],
+            colWidths=["36%", "64%"],
+        )
+        meta_tbl.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), B_LIGHT),
+            ("BOX",           (0, 0), (-1, -1), 0.8, B_DARK),
+            ("INNERGRID",     (0, 0), (-1, -1), 0.2, B_GREY),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ]))
+
+        return [
+            _sp(4), cover_tbl, _sp(6), meta_tbl, _sp(5),
+            _para(
+                "This audit report has been automatically generated by Barclays Sentinel V2 "
+                "using the GROQ llama-3.3-70b-versatile language model and live portfolio "
+                "metrics from the Sentinel AI scoring engine. It is intended for internal "
+                "compliance review, board risk committees, and regulatory inspection by the "
+                "Reserve Bank of India. This document does not constitute legal advice. "
+                "Human review by qualified legal counsel is required prior to regulatory submission.",
+                s["disclaimer"],
+            ),
+            _sp(3), _hr(B_DARK, 1),
+        ]
+
+    def _stats_page(self, stats: Dict, generated_at: str) -> list:
+        s = self.s
+        total = max(stats.get("total_customers", 1), 1)
+
+        rows = [
+            ["Total Customers Monitored",         str(stats.get("total_customers", 0))],
+            ["AI-Scored Customers",                f"{stats.get('scored_customers', 0)} "
+                                                   f"({stats.get('scored_customers', 0) / total * 100:.1f}%)"],
+            ["CRITICAL Risk Tier",                 str(stats.get("critical_count", 0))],
+            ["HIGH Risk Tier",                     str(stats.get("high_count", 0))],
+            ["MODERATE Risk Tier",                 str(stats.get("moderate_count", 0))],
+            ["WATCH Tier",                         str(stats.get("watch_count", 0))],
+            ["STABLE Tier",                        str(stats.get("stable_count", 0))],
+            ["Average Portfolio Pulse Score",      f"{stats.get('avg_pulse_score', 0) * 100:.2f} / 100"],
+            ["High-Severity Events (24h)",         str(stats.get("high_severity_24h", 0))],
+            ["Total Interventions Triggered",      str(stats.get("total_interventions", 0))],
+            ["System Health Index",                f"{stats.get('system_pulse', 84)} / 100"],
+        ]
+
+        lbl = ParagraphStyle("sl", fontName="Helvetica-Bold", fontSize=8, textColor=B_DARK)
+        val = ParagraphStyle("sv", fontName="Helvetica",      fontSize=8, textColor=B_BLACK)
+        tbl = Table(
+            [[_para(r[0], lbl), _para(r[1], val)] for r in rows],
+            colWidths=["60%", "40%"],
+        )
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), B_LIGHT),
+            ("ROWBACKGROUNDS",(0, 0), (-1, -1), [WHITE, B_LIGHT]),
+            ("BOX",           (0, 0), (-1, -1), 0.8, B_DARK),
+            ("INNERGRID",     (0, 0), (-1, -1), 0.3, B_GREY),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+        ]))
+
+        return [
+            _para("PORTFOLIO STATISTICS — AUDIT SNAPSHOT", s["section_head"]),
+            _sp(2), tbl,
+            _sp(3),
+            _para(
+                f"Statistics captured at time of audit generation ({generated_at[:10]}). "
+                "All figures sourced directly from the Sentinel V2 live scoring engine "
+                "and are verifiable against the core banking database.",
+                s["disclaimer"],
+            ),
+        ]
+
+    def _parse_and_render(self, report_text: str) -> list:
+        s      = self.s
+        story  = []
+        # Split on ALL-CAPS section headers (e.g. "SECTION 1: ..." or "EXECUTIVE SUMMARY:")
+        import re
+        parts = re.split(r'(?=\n{0,2}(?:SECTION\s+\d+[:\s]|[A-Z][A-Z\s,&\/]+:))', report_text)
+
+        section_colors = [
+            B_DARK,
+            colors.HexColor("#1a3a6b"),
+            colors.HexColor("#2c3e8c"),
+            colors.HexColor("#1b5e80"),
+            colors.HexColor("#00695c"),
+            colors.HexColor("#1b5e5a"),
+            colors.HexColor("#2e5902"),
+            colors.HexColor("#5d1a00"),
+        ]
+
+        idx = 0
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+
+            # Detect header line
+            header_match = re.match(r'^((?:SECTION\s+\d+[:\s][^\n]*|[A-Z][A-Z\s,&\/]{4,}:))', part)
+            header = header_match.group(1).rstrip(": ").strip() if header_match else None
+            body   = part[len(header_match.group(0)):].strip() if header_match else part
+
+            color = section_colors[idx % len(section_colors)]
+
+            if header:
+                head_style = ParagraphStyle(
+                    f"sh{idx}", fontName="Helvetica-Bold", fontSize=9.5,
+                    textColor=WHITE, backColor=color,
+                    leftIndent=4, spaceBefore=10, spaceAfter=4, leading=14,
+                )
+                story.append(_sp(3))
+                story.append(_para(header, head_style))
+                story.append(_para(
+                    "[ AI-ASSISTED — GROQ llama-3.3-70b-versatile | "
+                    "Based on live portfolio metrics | Human review required ]",
+                    s["ai_watermark"],
+                ))
+                idx += 1
+
+            if body:
+                for paragraph in body.split("\n\n"):
+                    paragraph = paragraph.strip()
+                    if paragraph:
+                        # Remove leftover markdown-style bullets if any
+                        paragraph = paragraph.replace("**", "").replace("##", "")
+                        story.append(_para(paragraph, s["body"]))
+
+        return story
+
+    def _cert_block(self, generated_at: str) -> list:
+        s = self.s
+        cert_text = (
+            f"This AI Regulatory Compliance Audit Report was automatically generated by the "
+            f"Sentinel V2 AI system on {generated_at[:10]} using the GROQ llama-3.3-70b-versatile "
+            f"large language model. The report is based on live portfolio metrics retrieved "
+            f"directly from the Sentinel V2 scoring engine. "
+            f"In accordance with Section 65B of the Indian Evidence Act, 1872, this computer-generated "
+            f"record is admissible as electronic evidence subject to human certification. "
+            f"This document is classified CONFIDENTIAL and is intended solely for "
+            f"Barclays Bank India's internal compliance teams, board risk committees, "
+            f"and authorised representatives of the Reserve Bank of India."
+        )
+        tbl = _boxed_table(
+            [[_para(cert_text, s["body"])]],
+            colors.HexColor("#F8F8F0"), B_DARK,
+        )
+        return [
+            _sp(6), _hr(B_DARK, 1.2), _sp(4),
+            _para("END OF AUDIT REPORT — CERTIFICATION", s["stamp"]),
+            _sp(3), tbl,
+            _sp(3),
+            _para(
+                f"© {datetime.now().year} {BANK_NAME_SHORT}. "
+                "All rights reserved. Unauthorised disclosure is prohibited.",
+                s["disclaimer"],
+            ),
+        ]

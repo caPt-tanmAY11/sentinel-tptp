@@ -45,7 +45,7 @@ from pydantic import BaseModel, Field
 
 from report_generator.report_generator import SentinelReportGenerator
 
-from report_generator.pdf_builder import BankReportPDFBuilder
+from report_generator.pdf_builder import BankReportPDFBuilder, AuditReportPDFBuilder
 
 report_router = APIRouter(prefix="/report", tags=["Report Generation"])
 
@@ -571,6 +571,69 @@ def _log_form_submission(conn, customer_id: str, form_id: str, form):
 
 
 # ── JSON serialisation helper ─────────────────────────────────────────────
+
+_audit_pdf_builder: Optional[AuditReportPDFBuilder] = None
+
+def _get_audit_pdf_builder() -> AuditReportPDFBuilder:
+    global _audit_pdf_builder
+    if _audit_pdf_builder is None:
+        _audit_pdf_builder = AuditReportPDFBuilder()
+    return _audit_pdf_builder
+
+
+class AuditPDFRequest(BaseModel):
+    report_text:        str
+    generated_at:       str
+    model:              str   = "llama-3.3-70b-versatile"
+    total_customers:    int   = 0
+    critical_count:     int   = 0
+    high_count:         int   = 0
+    moderate_count:     int   = 0
+    watch_count:        int   = 0
+    stable_count:       int   = 0
+    avg_pulse_score:    float = 0.0
+    scored_customers:   int   = 0
+    high_severity_24h:  int   = 0
+    total_interventions: int  = 0
+    system_pulse:       float = 84.0
+
+
+@report_router.post(
+    "/audit-pdf",
+    summary="Download AI Regulatory Compliance Audit as PDF",
+    description=(
+        "Accepts the GROQ-generated audit report text and live portfolio stats, "
+        "then renders a formal Barclays-letterhead PDF using ReportLab. "
+        "Returns the PDF as a binary download."
+    ),
+    response_class=Response,
+)
+async def download_audit_pdf(payload: AuditPDFRequest):
+    try:
+        stats = {
+            "total_customers":    payload.total_customers,
+            "critical_count":     payload.critical_count,
+            "high_count":         payload.high_count,
+            "moderate_count":     payload.moderate_count,
+            "watch_count":        payload.watch_count,
+            "stable_count":       payload.stable_count,
+            "avg_pulse_score":    payload.avg_pulse_score,
+            "scored_customers":   payload.scored_customers,
+            "high_severity_24h":  payload.high_severity_24h,
+            "total_interventions": payload.total_interventions,
+            "system_pulse":       payload.system_pulse,
+        }
+        builder   = _get_audit_pdf_builder()
+        pdf_bytes = builder.build(payload.report_text, stats, payload.generated_at)
+        dt_str    = payload.generated_at[:10].replace("-", "")
+        filename  = f"Barclays_Sentinel_AI_Audit_{dt_str}.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 def _make_json_safe(obj: Any) -> Any:
     """Recursively make a dict JSON-serialisable (handles datetime, Decimal, etc.)."""

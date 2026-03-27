@@ -44,6 +44,13 @@ export default function DashboardPage() {
   const [chartRange, setChartRange] = useState<'Live' | '1W' | '1M'>('Live');
   const PAGE_SIZE = 50;
 
+  // ── Audit modal state ─────────────────────────────────────────────────────
+  const [auditOpen,    setAuditOpen]    = useState(false);
+  const [auditReport,  setAuditReport]  = useState<string | null>(null);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError,   setAuditError]   = useState<string | null>(null);
+  const [auditMeta,    setAuditMeta]    = useState<{ generated_at: string; model: string } | null>(null);
+
   const { data: metrics, isLoading: metricsLoading, refetch: refetchMetrics } = useQuery({
     queryKey:        ['portfolio-metrics'],
     queryFn:         () => sentinelApi.getPortfolioMetrics().then(r => r.data),
@@ -171,7 +178,44 @@ export default function DashboardPage() {
 
   const pulseOffset = 552.92 - (systemPulse / 100) * 552.92;
 
+  // ── Audit report handler ──────────────────────────────────────────────────
+  const handleAuditOpen = async () => {
+    setAuditOpen(true);
+    if (auditReport) return;           // already generated this session
+    setAuditLoading(true);
+    setAuditError(null);
+    try {
+      const res = await fetch('/api/audit/report', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          total_customers:      metrics?.total_customers     ?? 0,
+          critical_count:       metrics?.critical_count      ?? 0,
+          high_count:           metrics?.high_count          ?? 0,
+          moderate_count:       metrics?.moderate_count      ?? 0,
+          watch_count:          metrics?.watch_count         ?? 0,
+          stable_count:         metrics?.stable_count        ?? 0,
+          avg_pulse_score:      metrics?.avg_pulse_score     ?? 0,
+          scored_customers:     metrics?.scored_customers    ?? 0,
+          high_severity_24h:    metrics?.high_severity_24h   ?? 0,
+          total_interventions:  metrics?.total_interventions ?? 0,
+          system_pulse:         systemPulse,
+          generated_at:         new Date().toISOString().slice(0, 10),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Report generation failed');
+      setAuditReport(data.report);
+      setAuditMeta({ generated_at: data.generated_at, model: data.model });
+    } catch (err: any) {
+      setAuditError(err.message);
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
   return (
+    <>
     <div className="p-8">
 
         <header className="flex justify-between items-center mb-6">
@@ -263,7 +307,7 @@ export default function DashboardPage() {
               all {metricsLoading ? '…' : (metrics?.total_customers ?? 0).toLocaleString('en-IN')} observed nodes in the last 24h.
             </p>
             <div className="flex gap-2 w-full">
-              <button className="flex-1 py-3 rounded-xl font-bold text-sm shadow-lg transition-opacity hover:opacity-90 text-white"
+              <button onClick={handleAuditOpen} className="flex-1 py-3 rounded-xl font-bold text-sm shadow-lg transition-opacity hover:opacity-90 text-white"
                 style={{ background: 'linear-gradient(135deg, #2b4bb9, #4865d3)', boxShadow: '0 8px 24px rgba(43,75,185,0.2)' }}>
                 Full Audit
               </button>
@@ -811,5 +855,181 @@ export default function DashboardPage() {
           </div>
         </footer>
       </div>
+
+      {/* ─── Full Audit Modal ─────────────────────────────────────────────── */}
+      {auditOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0,10,30,0.75)', backdropFilter: 'blur(6px)' }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl flex flex-col w-full" style={{ maxWidth: '860px', maxHeight: '92vh' }}>
+
+            {/* Modal Header */}
+            <div className="flex items-start justify-between px-8 py-5 border-b border-slate-100 flex-shrink-0"
+              style={{ background: 'linear-gradient(135deg,#002C77,#1a4a9f)' }}>
+              <div>
+                <h2 className="text-white font-extrabold text-xl tracking-tight">
+                  Sentinel AI V2 — Regulatory Compliance Audit Report
+                </h2>
+                <p className="text-blue-200 text-xs mt-1">
+                  Barclays India · Generated on {new Date().toLocaleString('en-IN', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </p>
+              </div>
+              <button
+                onClick={() => setAuditOpen(false)}
+                className="text-blue-200 hover:text-white transition-colors mt-1 ml-6 flex-shrink-0"
+              >
+                <span className="material-symbols-outlined text-2xl">close</span>
+              </button>
+            </div>
+
+            {/* Meta bar */}
+            {auditMeta && !auditLoading && (
+              <div className="flex items-center gap-6 px-8 py-2.5 bg-slate-50 border-b border-slate-100 text-xs text-slate-500 flex-shrink-0">
+                <span>🤖 <strong>Model:</strong> {auditMeta.model}</span>
+                <span>🕐 <strong>Generated:</strong> {new Date(auditMeta.generated_at).toLocaleString('en-IN')}</span>
+                <span className="ml-auto">
+                  <button
+                    onClick={async () => {
+                      if (!auditReport || !auditMeta) return;
+                      try {
+                        const res = await fetch('/api/report/audit-pdf', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            report_text:          auditReport,
+                            generated_at:         auditMeta.generated_at,
+                            model:                auditMeta.model,
+                            total_customers:      metrics?.total_customers     ?? 0,
+                            critical_count:       metrics?.critical_count      ?? 0,
+                            high_count:           metrics?.high_count          ?? 0,
+                            moderate_count:       metrics?.moderate_count      ?? 0,
+                            watch_count:          metrics?.watch_count         ?? 0,
+                            stable_count:         metrics?.stable_count        ?? 0,
+                            avg_pulse_score:      metrics?.avg_pulse_score     ?? 0,
+                            scored_customers:     metrics?.scored_customers    ?? 0,
+                            high_severity_24h:    metrics?.high_severity_24h   ?? 0,
+                            total_interventions:  metrics?.total_interventions ?? 0,
+                            system_pulse:         systemPulse,
+                          }),
+                        });
+                        if (!res.ok) throw new Error('PDF generation failed');
+                        const blob     = await res.blob();
+                        const url      = URL.createObjectURL(blob);
+                        const a        = document.createElement('a');
+                        a.href         = url;
+                        a.download     = `Barclays_Sentinel_AI_Audit_${auditMeta.generated_at.slice(0,10).replace(/-/g,'')}.pdf`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      } catch (e) {
+                        alert('PDF download failed. Ensure the scoring service is running.');
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-sm">picture_as_pdf</span>
+                    Download PDF
+                  </button>
+                </span>
+              </div>
+            )}
+
+            {/* Body */}
+            <div className="overflow-y-auto flex-1 px-8 py-6">
+
+              {/* Loading */}
+              {auditLoading && (
+                <div className="flex flex-col items-center justify-center py-24 gap-5 text-slate-500">
+                  <div className="relative w-16 h-16">
+                    <div className="absolute inset-0 rounded-full border-4 border-blue-100" />
+                    <div className="absolute inset-0 rounded-full border-4 border-t-blue-600 animate-spin" />
+                  </div>
+                  <div className="text-center">
+                    <p className="font-semibold text-slate-700">Generating compliance audit report…</p>
+                    <p className="text-sm text-slate-400 mt-1">GROQ is analysing all 8 regulatory sections</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Error */}
+              {auditError && !auditLoading && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-center">
+                  <span className="material-symbols-outlined text-red-400 text-4xl block mb-3">error</span>
+                  <p className="font-semibold text-red-700">{auditError}</p>
+                  <button
+                    onClick={() => { setAuditReport(null); setAuditError(null); handleAuditOpen(); }}
+                    className="mt-4 px-6 py-2 bg-red-600 text-white rounded-lg font-semibold text-sm hover:bg-red-700 transition-colors"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {/* Report */}
+              {auditReport && !auditLoading && (() => {
+                // Split on section headers (ALL CAPS followed by colon)
+                const sections = auditReport.split(/(?=\n[A-Z][A-Z\s&,\/]+:)/g);
+                return (
+                  <div className="space-y-6">
+                    {/* Disclaimer banner */}
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-3 text-xs text-amber-800">
+                      ⚠ This report is AI-generated by GROQ ({auditMeta?.model}) using live system metrics. It is intended for internal compliance review purposes only and does not constitute legal advice. Human review by qualified legal counsel is required before any regulatory submission.
+                    </div>
+
+                    {sections.map((section, idx) => {
+                      const trimmed   = section.trim();
+                      if (!trimmed) return null;
+
+                      // Detect header line (ALL CAPS ending in colon)
+                      const headerMatch = trimmed.match(/^([A-Z][A-Z\s&,\/\d]+:)/);
+                      const header      = headerMatch ? headerMatch[1] : null;
+                      const body        = header ? trimmed.slice(header.length).trim() : trimmed;
+
+                      // Section number / colour scheme
+                      const sectionColors = [
+                        'border-blue-600 bg-blue-700',
+                        'border-indigo-600 bg-indigo-700',
+                        'border-violet-600 bg-violet-700',
+                        'border-purple-600 bg-purple-700',
+                        'border-fuchsia-600 bg-fuchsia-700',
+                        'border-sky-600 bg-sky-700',
+                        'border-teal-600 bg-teal-700',
+                        'border-emerald-600 bg-emerald-700',
+                      ];
+                      const colorClass = sectionColors[idx % sectionColors.length];
+
+                      return (
+                        <div key={idx} className="rounded-xl overflow-hidden border border-slate-200 shadow-sm">
+                          {header && (
+                            <div className={`px-5 py-3 ${colorClass} flex items-center justify-between`}>
+                              <h3 className="text-white font-bold text-sm tracking-wide">{header.replace(/:$/, '')}</h3>
+                              <span className="text-white/60 text-xs font-mono">§{idx + 1}</span>
+                            </div>
+                          )}
+                          <div className="p-5 bg-white">
+                            <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-line">{body}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Footer stamp */}
+                    <div className="rounded-xl border-2 border-dashed border-slate-200 px-6 py-5 text-center space-y-1">
+                      <p className="text-xs text-slate-500 font-semibold uppercase tracking-widest">End of Audit Report</p>
+                      <p className="text-xs text-slate-400">
+                        Sentinel AI V2 · Barclays India · {auditMeta ? new Date(auditMeta.generated_at).toLocaleString('en-IN') : ''}
+                      </p>
+                      <p className="text-[10px] text-slate-300 mt-1">
+                        Generated by {auditMeta?.model} · For internal compliance use only
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
