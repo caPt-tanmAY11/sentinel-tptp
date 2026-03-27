@@ -391,18 +391,19 @@ async def download_pdf_report(
         pulse_data["stress_events_count"] = len(transactions)
 
         gen    = _get_report_gen()
-        report = gen.generate(
+        # Use raw generate_bank_report() — PDF builder expects the full
+        # bank report structure (sections, raw_data), not the reshaped frontend shape
+        report = gen.generate_bank_report(
             customer_data=customer,
             pulse_data=pulse_data,
-            flagged_transactions=transactions,
-            baseline_data=baseline,
-            form_link=form_link,
+            transactions=transactions,
         )
 
         builder   = _get_pdf_builder()
         pdf_bytes = builder.build(report)
 
-        ref_no   = report.get("reference_number", "report").replace("/", "-")
+        # Bank report uses "reference" not "reference_number"
+        ref_no   = report.get("reference", report.get("report_id", "report")).replace("/", "-")
         filename = f"Barclays_PDI_{ref_no}.pdf"
 
         return Response(

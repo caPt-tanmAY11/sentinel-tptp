@@ -136,7 +136,7 @@ class PulseEngine:
             event_id   = str(uuid.uuid4())
             latency_ms = int((time.time() - t_start) * 1000)
 
-            cursor.execute("""
+            cursor.execute("""\
                 INSERT INTO transaction_pulse_events (
                     event_id, customer_id, transaction_id, event_ts,
                     amount, platform, receiver_id, payment_status,
@@ -156,6 +156,34 @@ class PulseEngine:
                 model.model_version if (model and model.is_loaded) else "fallback",
                 latency_ms,
             ))
+
+            # ── Also write to raw transactions table so customer profile
+            #    Transaction History section shows real-time events ──────
+            try:
+                cursor.execute("""\
+                    INSERT INTO transactions (
+                        transaction_id, customer_id, account_number,
+                        sender_id, sender_name,
+                        receiver_id, receiver_name,
+                        amount, platform, payment_status,
+                        reference_number,
+                        balance_before, balance_after,
+                        txn_timestamp
+                    ) VALUES (%s,%s,%s, %s,%s, %s,%s, %s,%s,%s, %s, %s,%s, %s)
+                    ON CONFLICT DO NOTHING
+                """, (
+                    event.event_id, cid, event.account_number,
+                    event.sender_id,   event.sender_name,
+                    event.receiver_id, event.receiver_name,
+                    event.amount, event.platform, event.payment_status,
+                    None,  # reference_number — not in TransactionEvent, nullable
+                    event.balance_before, event.balance_after,
+                    event.txn_timestamp,
+                ))
+            except Exception as txn_err:
+                # Non-blocking — pulse scoring continues even if raw insert fails
+                print(f"  ⚠ Raw transaction insert failed (non-fatal): {txn_err}")
+
             conn.commit()
             cursor.close()
 
