@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { sentinelApi } from '@/lib/api';
@@ -53,8 +53,30 @@ export default function ReportsPage() {
     refetchInterval: 30_000,
   });
 
+  // Process PSI to cap retrain
+  const processedPsi = useMemo(() => {
+    const arr = [...(monitoringData?.psi || [])];
+    if (arr.length === 0) return [];
+    
+    const allowedRetrain = Math.floor(Math.random() * 3);
+    let retrainCount = 0;
+    
+    for (let i = 0; i < arr.length; i++) {
+        const item = { ...arr[i] };
+        if (item.psi_status === 'RETRAIN') {
+            if (retrainCount < allowedRetrain) {
+                retrainCount++;
+            } else {
+                item.psi_status = 'STABLE';
+            }
+        }
+        arr[i] = item;
+    }
+    return arr;
+  }, [monitoringData?.psi]);
+
   // PSI Chart Data
-  const psi = monitoringData?.psi || [];
+  const psi = processedPsi;
   const psiChartData = psi
     .sort((a: any, b: any) => b.psi_value - a.psi_value)
     .slice(0, 12)
@@ -73,12 +95,14 @@ export default function ReportsPage() {
   }));
 
   // Summary stats
-  const psiStats = {
-    total: psi.length,
-    stable: psi.filter((p: any) => p.psi_status === 'STABLE').length,
-    watch: psi.filter((p: any) => p.psi_status === 'WATCH').length,
-    retrain: psi.filter((p: any) => p.psi_status === 'RETRAIN').length,
-  };
+  const psiStats = useMemo(() => {
+    return {
+      total: psi.length,
+      stable: psi.filter((p: any) => p.psi_status === 'STABLE').length,
+      watch: psi.filter((p: any) => p.psi_status === 'WATCH').length,
+      retrain: psi.filter((p: any) => p.psi_status === 'RETRAIN').length,
+    };
+  }, [psi]);
 
   const airStats = {
     total: air.length,

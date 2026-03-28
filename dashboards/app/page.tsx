@@ -8,8 +8,7 @@ export default function LandingPage() {
         <div className="flex justify-between items-center max-w-7xl mx-auto px-6 h-20">
           <div className="text-xl font-bold tracking-tighter text-blue-700 font-headline">Sentinel AI</div>
           <div className="flex items-center gap-4">
-            <Link href="/login" className="text-slate-600 font-headline text-sm font-semibold px-4 py-2 hover:opacity-80 transition-opacity">Login</Link>
-            <Link href="/dashboard" className="bg-primary text-on-primary px-6 py-2.5 rounded-xl font-headline text-sm font-bold shadow-lg shadow-primary/20 active:scale-95 transition-all">Get Started</Link>
+            <Link href="/login" className="bg-primary text-on-primary px-6 py-2.5 rounded-xl font-headline text-sm font-bold shadow-lg shadow-primary/20 active:scale-95 transition-all">Login</Link>
           </div>
         </div>
       </nav>
@@ -22,7 +21,7 @@ export default function LandingPage() {
         </div>
 
         {/* Hero Section */}
-        <section className="max-w-7xl mx-auto px-6 pt-24 pb-32">
+        <section className="max-w-7xl mx-auto px-6 pt-12 pb-24">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-16 items-center">
             <div className="lg:col-span-7 space-y-8">
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 text-primary font-label text-xs font-bold tracking-widest uppercase">

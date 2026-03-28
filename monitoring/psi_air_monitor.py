@@ -533,3 +533,10 @@ def run_all_monitoring(conn=None) -> Dict[str, Any]:
     }
 
     return summary
+if __name__ == "__main__":
+    print("🚀 Starting PSI + AIR Monitoring...\n")
+
+    summary = run_all_monitoring()
+
+    print("\n✅ Monitoring Summary:\n")
+    print(json.dumps(summary, indent=2))

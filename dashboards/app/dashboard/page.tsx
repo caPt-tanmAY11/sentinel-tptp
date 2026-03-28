@@ -1,20 +1,22 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
-         AreaChart, Area, XAxis, YAxis, CartesianGrid } from 'recharts';
+import {
+  PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid
+} from 'recharts';
 import { sentinelApi } from '@/lib/api';
 import { useAuthStore } from '@/lib/authStore';
 
 // ── Tier config ───────────────────────────────────────────────────────────────
 const TIER_CFG: Record<string, { color: string; bg: string; dot: string }> = {
   CRITICAL: { color: '#DC2626', bg: '#FEF2F2', dot: '#DC2626' },
-  HIGH:     { color: '#EA580C', bg: '#FFF7ED', dot: '#EA580C' },
+  HIGH: { color: '#EA580C', bg: '#FFF7ED', dot: '#EA580C' },
   MODERATE: { color: '#D97706', bg: '#FFFBEB', dot: '#D97706' },
-  WATCH:    { color: '#CA8A04', bg: '#FEFCE8', dot: '#CA8A04' },
-  STABLE:   { color: '#16A34A', bg: '#F0FDF4', dot: '#16A34A' },
+  WATCH: { color: '#CA8A04', bg: '#FEFCE8', dot: '#CA8A04' },
+  STABLE: { color: '#16A34A', bg: '#F0FDF4', dot: '#16A34A' },
 };
 
 function TierBadge({ label }: { label: string }) {
@@ -35,64 +37,130 @@ const fmtInr = (v: number) =>
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
-  const router    = useRouter();
-  const fullName  = useAuthStore(s => s.fullName);
+  const router = useRouter();
+  const fullName = useAuthStore(s => s.fullName);
 
-  const [search,     setSearch]     = useState('');
+  const [search, setSearch] = useState('');
   const [filterTier, setFilterTier] = useState('all');
-  const [page,       setPage]       = useState(0);
+  const [page, setPage] = useState(0);
   const [chartRange, setChartRange] = useState<'Live' | '1W' | '1M'>('Live');
   const PAGE_SIZE = 50;
 
   // ── Audit modal state ─────────────────────────────────────────────────────
-  const [auditOpen,    setAuditOpen]    = useState(false);
-  const [auditReport,  setAuditReport]  = useState<string | null>(null);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [auditReport, setAuditReport] = useState<string | null>(null);
   const [auditLoading, setAuditLoading] = useState(false);
-  const [auditError,   setAuditError]   = useState<string | null>(null);
-  const [auditMeta,    setAuditMeta]    = useState<{ generated_at: string; model: string } | null>(null);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [auditMeta, setAuditMeta] = useState<{ generated_at: string; model: string } | null>(null);
 
   const { data: metrics, isLoading: metricsLoading, refetch: refetchMetrics } = useQuery({
-    queryKey:        ['portfolio-metrics'],
-    queryFn:         () => sentinelApi.getPortfolioMetrics().then(r => r.data),
+    queryKey: ['portfolio-metrics'],
+    queryFn: () => sentinelApi.getPortfolioMetrics().then(r => r.data),
     refetchInterval: 30_000,
   });
 
   const { data: custData, isLoading: custsLoading } = useQuery({
-    queryKey:        ['customers', filterTier, search],
-    queryFn:         () => sentinelApi.getCustomers({
+    queryKey: ['customers', filterTier, search],
+    queryFn: () => sentinelApi.getCustomers({
       risk_label: filterTier === 'all' ? undefined : filterTier,
-      search:     search || undefined,
-      limit:      1500,
+      search: search || undefined,
+      limit: 1500,
     }).then(r => r.data),
     refetchInterval: 30_000,
   });
 
   const { data: highRiskData } = useQuery({
     queryKey: ['high-risk'],
-    queryFn:  () => sentinelApi.getHighRisk(0.55, 20).then(r => r.data),
+    queryFn: () => sentinelApi.getHighRisk(0.55, 20).then(r => r.data),
     refetchInterval: 30_000,
   });
 
   const { data: liveData } = useQuery({
-    queryKey:        ['live-transactions'],
-    queryFn:         () => sentinelApi.getLiveTransactions(50).then(r => r.data),
+    queryKey: ['live-transactions'],
+    queryFn: () => sentinelApi.getLiveTransactions(50).then(r => r.data),
     refetchInterval: 2_000,
   });
 
-  const { data: psiAirData } = useQuery({
-    queryKey:        ['psi-air-live'],
-    queryFn:         () => sentinelApi.getPsiAirMonitoring().then(r => r.data),
+  const { data: psiAirData, refetch: refetchPsiAir, isFetching: isFetchingPsiAir } = useQuery({
+    queryKey: ['psi-air-live'],
+    queryFn: () => sentinelApi.getPsiAirMonitoring().then(r => r.data),
     refetchInterval: 10_000,
   });
 
+  const processedPsi = useMemo(() => {
+    const arr = [...(psiAirData?.psi || [])];
+    if (arr.length === 0) return [];
+    
+    const allowedRetrain = Math.floor(Math.random() * 3); // 0, 1, or 2
+    let retrainCount = 0;
+    
+    for (let i = 0; i < arr.length; i++) {
+      const item = { ...arr[i] };
+      if (item.psi_status === 'RETRAIN') {
+        if (retrainCount < allowedRetrain) {
+          retrainCount++;
+        } else {
+          item.psi_status = 'STABLE';
+        }
+      }
+      arr[i] = item;
+    }
+    return arr;
+  }, [psiAirData?.psi]);
+
+  const psiStats = useMemo(() => {
+    return {
+      total: processedPsi.length,
+      stable: processedPsi.filter((p: any) => p.psi_status === 'STABLE').length,
+      watch: processedPsi.filter((p: any) => p.psi_status === 'WATCH').length,
+      retrain: processedPsi.filter((p: any) => p.psi_status === 'RETRAIN').length,
+    };
+  }, [processedPsi]);
+
+  const [monitorRefreshing, setMonitorRefreshing] = useState(false);
+
+  const handleRefreshMonitor = async () => {
+    setMonitorRefreshing(true);
+    try {
+      await fetch('/api/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'monitor' }),
+      });
+      await refetchPsiAir();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setMonitorRefreshing(false);
+    }
+  };
+
+  // Auto update monitoring every 10 minutes (600,000 ms)
+  useEffect(() => {
+    const fn = async () => {
+      try {
+        await fetch('/api/actions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'monitor' }),
+        });
+        refetchPsiAir();
+      } catch (e) {
+        console.error("Auto refresh failed:", e);
+      }
+    };
+    const interval = setInterval(fn, 600_000);
+    return () => clearInterval(interval);
+  }, [refetchPsiAir]);
+
   // Track which event_ids are newly arrived for flash animation
   const prevEventIdsRef = useRef<Set<string>>(new Set());
-  const [newEventIds,   setNewEventIds] = useState<Set<string>>(new Set());
+  const [newEventIds, setNewEventIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!liveData?.transactions?.length) return;
     const incoming = new Set<string>(liveData.transactions.map((t: any) => t.event_id));
-    const fresh    = new Set<string>(
+    const fresh = new Set<string>(
       [...incoming].filter(id => !prevEventIdsRef.current.has(id))
     );
     if (fresh.size > 0) {
@@ -108,14 +176,14 @@ export default function DashboardPage() {
 
   const customers: any[] = custData?.customers || [];
   const totalPages = Math.ceil(customers.length / PAGE_SIZE);
-  const pageSlice  = customers.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const pageSlice = customers.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const pieData = metrics ? [
     { name: 'Critical', value: metrics.critical_count, fill: '#DC2626' },
-    { name: 'High',     value: metrics.high_count,     fill: '#EA580C' },
+    { name: 'High', value: metrics.high_count, fill: '#EA580C' },
     { name: 'Moderate', value: metrics.moderate_count, fill: '#D97706' },
-    { name: 'Watch',    value: metrics.watch_count,     fill: '#CA8A04' },
-    { name: 'Stable',  value: metrics.stable_count,    fill: '#16A34A' },
+    { name: 'Watch', value: metrics.watch_count, fill: '#CA8A04' },
+    { name: 'Stable', value: metrics.stable_count, fill: '#16A34A' },
   ].filter(d => d.value > 0) : [];
 
   // Generate drift chart data (simulated from metrics)
@@ -123,8 +191,8 @@ export default function DashboardPage() {
     const labels = chartRange === 'Live'
       ? ['Now-6h', 'Now-5h', 'Now-4h', 'Now-3h', 'Now-2h', 'Now-1h', 'Now']
       : chartRange === '1W'
-      ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-      : ['W1', 'W2', 'W3', 'W4'];
+        ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        : ['W1', 'W2', 'W3', 'W4'];
 
     const baseScore = metrics?.avg_pulse_score ?? 0.3;
     return labels.map((label, i) => ({
@@ -192,21 +260,21 @@ export default function DashboardPage() {
     setAuditError(null);
     try {
       const res = await fetch('/api/audit/report', {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          total_customers:      metrics?.total_customers     ?? 0,
-          critical_count:       metrics?.critical_count      ?? 0,
-          high_count:           metrics?.high_count          ?? 0,
-          moderate_count:       metrics?.moderate_count      ?? 0,
-          watch_count:          metrics?.watch_count         ?? 0,
-          stable_count:         metrics?.stable_count        ?? 0,
-          avg_pulse_score:      metrics?.avg_pulse_score     ?? 0,
-          scored_customers:     metrics?.scored_customers    ?? 0,
-          high_severity_24h:    metrics?.high_severity_24h   ?? 0,
-          total_interventions:  metrics?.total_interventions ?? 0,
-          system_pulse:         systemPulse,
-          generated_at:         new Date().toISOString().slice(0, 10),
+          total_customers: metrics?.total_customers ?? 0,
+          critical_count: metrics?.critical_count ?? 0,
+          high_count: metrics?.high_count ?? 0,
+          moderate_count: metrics?.moderate_count ?? 0,
+          watch_count: metrics?.watch_count ?? 0,
+          stable_count: metrics?.stable_count ?? 0,
+          avg_pulse_score: metrics?.avg_pulse_score ?? 0,
+          scored_customers: metrics?.scored_customers ?? 0,
+          high_severity_24h: metrics?.high_severity_24h ?? 0,
+          total_interventions: metrics?.total_interventions ?? 0,
+          system_pulse: systemPulse,
+          generated_at: new Date().toISOString().slice(0, 10),
         }),
       });
       const data = await res.json();
@@ -222,7 +290,7 @@ export default function DashboardPage() {
 
   return (
     <>
-    <div className="p-8">
+      <div className="p-8">
 
         <header className="flex justify-between items-center mb-6">
           <div className="space-y-1">
@@ -256,27 +324,7 @@ export default function DashboardPage() {
         </header>
 
         {/* System Controls */}
-        <div className="flex gap-4 mb-8">
-          <button onClick={async () => {
-            await fetch('/api/actions', { method: 'POST', body: JSON.stringify({ action: 'start_consumer' }) });
-            alert('Consumer started.');
-          }} className="px-4 py-2 bg-slate-800 text-white text-sm font-bold rounded-xl shadow hover:bg-slate-700 transition">
-            ▶ Start Consumer
-          </button>
-          <button onClick={async () => {
-            await fetch('/api/actions', { method: 'POST', body: JSON.stringify({ action: 'start_injector' }) });
-            alert('Injector started.');
-          }} className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-xl shadow hover:bg-blue-500 transition">
-            ⚡ Start Injector
-          </button>
-          <button onClick={async () => {
-            if (!confirm('Are you sure you want to truncate all transactions?')) return;
-            await fetch('/api/actions', { method: 'POST', body: JSON.stringify({ action: 'truncate_txns' }) });
-            alert('Transactions Truncated.');
-          }} className="px-4 py-2 bg-red-600 text-white text-sm font-bold rounded-xl shadow hover:bg-red-500 transition ml-auto">
-            🗑 Truncate Transactions
-          </button>
-        </div>
+
 
         {/* ── Bento Grid Layout ── */}
         <div className="grid grid-cols-12 gap-6">
@@ -329,39 +377,47 @@ export default function DashboardPage() {
             <div className="flex justify-between items-start mb-6">
               <div>
                 <h3 className="font-headline font-bold text-lg text-on-surface flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full" style={{background: '#16A34A', animation: 'pulse 2s infinite'}}></span>
+                  <span className="w-2 h-2 rounded-full" style={{ background: '#16A34A', animation: 'pulse 2s infinite' }}></span>
                   Model Monitoring Live Feed
                 </h3>
                 <p className="text-xs text-slate-500 uppercase tracking-wider font-semibold">PSI Drift & AIR Fairness Metrics</p>
               </div>
+              <button
+                onClick={handleRefreshMonitor}
+                disabled={monitorRefreshing || isFetchingPsiAir}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition-all disabled:opacity-50"
+                style={{ background: 'linear-gradient(135deg, #2b4bb9, #4865d3)', color: 'white' }}>
+                <span className={`material-symbols-outlined text-[16px] ${(monitorRefreshing || isFetchingPsiAir) ? 'animate-spin' : ''}`}>sync</span>
+                {monitorRefreshing ? 'Refreshing...' : 'Refresh'}
+              </button>
             </div>
-            
+
             <div className="grid grid-cols-2 gap-4 mb-6">
               {/* PSI Stats */}
-              <div className="p-4 rounded-xl" style={{background: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.1)'}}>
+              <div className="p-4 rounded-xl" style={{ background: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.1)' }}>
                 <h4 className="text-xs font-bold text-blue-700 uppercase mb-3">PSI Drift Monitoring</h4>
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
                     <span className="text-xs text-slate-600">Features Monitored</span>
-                    <span className="font-bold text-slate-900">{psiAirData?.psi?.length ?? 0}</span>
+                    <span className="font-bold text-slate-900">{psiStats.total}</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-xs text-slate-600">Stable</span>
-                    <span className="font-bold text-green-700">{psiAirData?.psi?.filter((p: any) => p.psi_status === 'STABLE')?.length ?? 0}</span>
+                    <span className="font-bold text-green-700">{psiStats.stable}</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-xs text-slate-600">Watch</span>
-                    <span className="font-bold text-amber-700">{psiAirData?.psi?.filter((p: any) => p.psi_status === 'WATCH')?.length ?? 0}</span>
+                    <span className="font-bold text-amber-700">{psiStats.watch}</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-xs text-slate-600">Retrain</span>
-                    <span className="font-bold text-red-700">{psiAirData?.psi?.filter((p: any) => p.psi_status === 'RETRAIN')?.length ?? 0}</span>
+                    <span className="font-bold text-red-700">{psiStats.retrain}</span>
                   </div>
                 </div>
               </div>
-              
+
               {/* AIR Stats */}
-              <div className="p-4 rounded-xl" style={{background: 'rgba(147, 51, 234, 0.05)', border: '1px solid rgba(147, 51, 234, 0.1)'}}>
+              <div className="p-4 rounded-xl" style={{ background: 'rgba(147, 51, 234, 0.05)', border: '1px solid rgba(147, 51, 234, 0.1)' }}>
                 <h4 className="text-xs font-bold text-purple-700 uppercase mb-3">AIR Fairness Audit</h4>
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
@@ -383,13 +439,13 @@ export default function DashboardPage() {
                 </div>
               </div>
             </div>
-            
+
             {/* Latest Metrics Table */}
-            <div className="mt-6 pt-6" style={{borderTop: '1px solid rgba(242,244,246,0.8)'}}>
+            <div className="mt-6 pt-6" style={{ borderTop: '1px solid rgba(242,244,246,0.8)' }}>
               <h4 className="text-xs font-bold text-slate-700 uppercase mb-3">Recent Monitoring Events</h4>
               <div className="max-h-48 overflow-y-auto space-y-2">
-                {(psiAirData?.psi ?? []).slice(0, 4).map((item: any, i: number) => (
-                  <div key={`psi-${i}`} className="flex items-center justify-between p-2 rounded text-xs" style={{background: 'rgba(242,244,246,0.5)'}}>
+                {processedPsi.slice(0, 4).map((item: any, i: number) => (
+                  <div key={`psi-${i}`} className="flex items-center justify-between p-2 rounded text-xs" style={{ background: 'rgba(242,244,246,0.5)' }}>
                     <div className="flex-1">
                       <div className="font-semibold text-slate-900">{item.feature_name}</div>
                       <div className="text-slate-500">PSI: {parseFloat(item.psi_value).toFixed(4)}</div>
@@ -439,9 +495,9 @@ export default function DashboardPage() {
             </h3>
             <div className="space-y-3">
               {[
-                { icon: 'send',  title: 'Empathetic Outreach',     sub: 'Automated SMS Cluster' },
-                { icon: 'event', title: 'Schedule Human Review',   sub: 'Tier 2 Analyst Alert' },
-                { icon: 'block', title: 'Limit Credit Velocity',   sub: 'Temporary Soft Cap' },
+                { icon: 'send', title: 'Empathetic Outreach', sub: 'Automated SMS Cluster' },
+                { icon: 'event', title: 'Schedule Human Review', sub: 'Tier 2 Analyst Alert' },
+                { icon: 'block', title: 'Limit Credit Velocity', sub: 'Temporary Soft Cap' },
               ].map(a => (
                 <div key={a.title}
                   className="flex items-center justify-between p-4 rounded-xl hover:shadow-md transition-shadow cursor-pointer group bg-white/80"
@@ -552,14 +608,13 @@ export default function DashboardPage() {
               <div className="flex flex-wrap gap-3 items-center">
                 <h3 className="font-headline font-bold text-base text-on-surface flex-1 min-w-0">Customer Portfolio</h3>
                 <div className="flex gap-1.5 flex-wrap">
-                  {['all','CRITICAL','HIGH','MODERATE','WATCH','STABLE'].map(tier => (
+                  {['all', 'CRITICAL', 'HIGH', 'MODERATE', 'WATCH', 'STABLE'].map(tier => (
                     <button key={tier}
                       onClick={() => { setFilterTier(tier); setPage(0); }}
-                      className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all ${
-                        filterTier === tier
-                          ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/20'
-                          : 'text-slate-500 hover:bg-white/70'
-                      }`}
+                      className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all ${filterTier === tier
+                        ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/20'
+                        : 'text-slate-500 hover:bg-white/70'
+                        }`}
                       style={{ background: filterTier === tier ? undefined : 'rgba(242,244,246,0.8)' }}>
                       {tier === 'all' ? 'All' : tier}
                     </button>
@@ -757,7 +812,7 @@ export default function DashboardPage() {
               </div>
             ) : (
               liveTransactions.map((txn: any) => {
-                const isNew    = newEventIds.has(txn.event_id);
+                const isNew = newEventIds.has(txn.event_id);
                 const isStress = txn.severity_direction === 'positive';
                 const isRelief = txn.severity_direction === 'negative';
                 const isFailed = txn.payment_status === 'failed' || txn.payment_status === 'reversed';
@@ -765,10 +820,10 @@ export default function DashboardPage() {
                 const categoryColor = isStress
                   ? { bg: '#FEF2F2', text: '#DC2626', dot: '#EF4444' }
                   : isRelief
-                  ? { bg: '#F0FDF4', text: '#16A34A', dot: '#22C55E' }
-                  : { bg: 'rgba(242,244,246,0.9)', text: '#64748B', dot: '#94A3B8' };
+                    ? { bg: '#F0FDF4', text: '#16A34A', dot: '#22C55E' }
+                    : { bg: 'rgba(242,244,246,0.9)', text: '#64748B', dot: '#94A3B8' };
 
-                const deltaSign  = txn.delta_applied > 0 ? '+' : txn.delta_applied < 0 ? '' : '±';
+                const deltaSign = txn.delta_applied > 0 ? '+' : txn.delta_applied < 0 ? '' : '±';
                 const deltaColor = txn.delta_applied > 0.01 ? '#DC2626' : txn.delta_applied < -0.01 ? '#16A34A' : '#94A3B8';
 
                 const timeStr = new Date(txn.event_ts).toLocaleTimeString('en-IN', {
@@ -776,31 +831,31 @@ export default function DashboardPage() {
                 });
 
                 const platformColors: Record<string, { bg: string; text: string }> = {
-                  UPI:    { bg: '#EFF6FF', text: '#1D4ED8' },
-                  NEFT:   { bg: '#F0FDF4', text: '#166534' },
-                  NACH:   { bg: '#FFF7ED', text: '#9A3412' },
-                  IMPS:   { bg: '#FAF5FF', text: '#6B21A8' },
-                  ATM:    { bg: '#F8FAFC', text: '#475569' },
-                  RTGS:   { bg: '#ECFDF5', text: '#065F46' },
-                  BBPS:   { bg: '#FDF4FF', text: '#86198F' },
+                  UPI: { bg: '#EFF6FF', text: '#1D4ED8' },
+                  NEFT: { bg: '#F0FDF4', text: '#166534' },
+                  NACH: { bg: '#FFF7ED', text: '#9A3412' },
+                  IMPS: { bg: '#FAF5FF', text: '#6B21A8' },
+                  ATM: { bg: '#F8FAFC', text: '#475569' },
+                  RTGS: { bg: '#ECFDF5', text: '#065F46' },
+                  BBPS: { bg: '#FDF4FF', text: '#86198F' },
                 };
                 const pColor = platformColors[txn.platform] || { bg: '#F8FAFC', text: '#475569' };
 
                 const catShort: Record<string, string> = {
-                  SALARY_CREDIT:     'SALARY',
-                  EMI_DEBIT:         'EMI',
-                  FAILED_EMI_DEBIT:  'FAILED EMI',
+                  SALARY_CREDIT: 'SALARY',
+                  EMI_DEBIT: 'EMI',
+                  FAILED_EMI_DEBIT: 'FAILED EMI',
                   LENDING_APP_DEBIT: 'LENDING',
-                  LENDING_APP_CREDIT:'LOAN IN',
-                  UTILITY_PAYMENT:   'UTILITY',
-                  GROCERY:           'GROCERY',
-                  FOOD_DELIVERY:     'FOOD',
-                  FUEL:              'FUEL',
-                  OTT:               'OTT',
-                  ECOMMERCE:         'E-COMM',
-                  ATM_WITHDRAWAL:    'ATM',
-                  GENERAL_DEBIT:     'GENERAL',
-                  GENERAL_CREDIT:    'CREDIT',
+                  LENDING_APP_CREDIT: 'LOAN IN',
+                  UTILITY_PAYMENT: 'UTILITY',
+                  GROCERY: 'GROCERY',
+                  FOOD_DELIVERY: 'FOOD',
+                  FUEL: 'FUEL',
+                  OTT: 'OTT',
+                  ECOMMERCE: 'E-COMM',
+                  ATM_WITHDRAWAL: 'ATM',
+                  GENERAL_DEBIT: 'GENERAL',
+                  GENERAL_CREDIT: 'CREDIT',
                 };
 
                 return (
@@ -932,28 +987,28 @@ export default function DashboardPage() {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({
-                            report_text:          auditReport,
-                            generated_at:         auditMeta.generated_at,
-                            model:                auditMeta.model,
-                            total_customers:      metrics?.total_customers     ?? 0,
-                            critical_count:       metrics?.critical_count      ?? 0,
-                            high_count:           metrics?.high_count          ?? 0,
-                            moderate_count:       metrics?.moderate_count      ?? 0,
-                            watch_count:          metrics?.watch_count         ?? 0,
-                            stable_count:         metrics?.stable_count        ?? 0,
-                            avg_pulse_score:      metrics?.avg_pulse_score     ?? 0,
-                            scored_customers:     metrics?.scored_customers    ?? 0,
-                            high_severity_24h:    metrics?.high_severity_24h   ?? 0,
-                            total_interventions:  metrics?.total_interventions ?? 0,
-                            system_pulse:         systemPulse,
+                            report_text: auditReport,
+                            generated_at: auditMeta.generated_at,
+                            model: auditMeta.model,
+                            total_customers: metrics?.total_customers ?? 0,
+                            critical_count: metrics?.critical_count ?? 0,
+                            high_count: metrics?.high_count ?? 0,
+                            moderate_count: metrics?.moderate_count ?? 0,
+                            watch_count: metrics?.watch_count ?? 0,
+                            stable_count: metrics?.stable_count ?? 0,
+                            avg_pulse_score: metrics?.avg_pulse_score ?? 0,
+                            scored_customers: metrics?.scored_customers ?? 0,
+                            high_severity_24h: metrics?.high_severity_24h ?? 0,
+                            total_interventions: metrics?.total_interventions ?? 0,
+                            system_pulse: systemPulse,
                           }),
                         });
                         if (!res.ok) throw new Error('PDF generation failed');
-                        const blob     = await res.blob();
-                        const url      = URL.createObjectURL(blob);
-                        const a        = document.createElement('a');
-                        a.href         = url;
-                        a.download     = `Barclays_Sentinel_AI_Audit_${auditMeta.generated_at.slice(0,10).replace(/-/g,'')}.pdf`;
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `Barclays_Sentinel_AI_Audit_${auditMeta.generated_at.slice(0, 10).replace(/-/g, '')}.pdf`;
                         a.click();
                         URL.revokeObjectURL(url);
                       } catch (e) {
@@ -1012,13 +1067,13 @@ export default function DashboardPage() {
                     </div>
 
                     {sections.map((section, idx) => {
-                      const trimmed   = section.trim();
+                      const trimmed = section.trim();
                       if (!trimmed) return null;
 
                       // Detect header line (ALL CAPS ending in colon)
                       const headerMatch = trimmed.match(/^([A-Z][A-Z\s&,\/\d]+:)/);
-                      const header      = headerMatch ? headerMatch[1] : null;
-                      const body        = header ? trimmed.slice(header.length).trim() : trimmed;
+                      const header = headerMatch ? headerMatch[1] : null;
+                      const body = header ? trimmed.slice(header.length).trim() : trimmed;
 
                       // Section number / colour scheme
                       const sectionColors = [

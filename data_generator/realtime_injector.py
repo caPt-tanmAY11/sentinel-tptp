@@ -7,6 +7,7 @@ Modes:
   random    — rich mix of everyday normal Indian transactions
   stress    — lending app transfers + failed EMI (stress signals)
   recovery  — salary credit + successful EMI (relief signals)
+  fraud     — high amount international transfers (PFD anomalies)
 
 Normal transactions cover:
   P2P transfers, dining, groceries, coffee, medical, fuel, travel,
@@ -179,6 +180,7 @@ class RealTimeInjector:
       random   — true mix: normal + investment + salary + stress + recovery
       stress   — lending apps + failed EMI (concentrated stress signals)
       recovery — salary credit + on-time EMI (concentrated relief signals)
+      fraud    — huge international transfers triggering PFD rules
 
     span_hours > 0: transactions are assigned timestamps spread evenly over
                     the past <span_hours> hours instead of using now().
@@ -214,6 +216,8 @@ class RealTimeInjector:
             txn = self._build_stress(customer, timestamp)
         elif self.mode == "recovery":
             txn = self._build_recovery(customer, timestamp)
+        elif self.mode == "fraud":
+            txn = self._build_fraud(customer, timestamp)
         else:
             txn = self._build_random(customer, timestamp)
 
@@ -493,6 +497,34 @@ class RealTimeInjector:
                 txn_timestamp=self._ts(timestamp),
             )
 
+    def _build_fraud(self, customer: Dict[str, Any], timestamp: Optional[datetime] = None) -> TransactionEvent:
+        """Fraud transaction — massive international transfer."""
+        monthly = float(customer.get("monthly_income", 50000))
+        amount  = round(monthly * self.rng.uniform(3.0, 5.0))
+        
+        bal_before = round(self.rng.uniform(amount, amount * 1.5))
+        bal_after  = max(0.0, float(bal_before) - amount)
+
+        return TransactionEvent(
+            event_id=str(uuid.uuid4()),
+            customer_id=str(customer["customer_id"]),
+            account_number=customer.get("account_number"),
+            sender_id=customer.get("account_number"),
+            sender_name=f"{customer['first_name']} {customer['last_name']}",
+            receiver_id="offshore_exchange_uae@swift",
+            receiver_name="Offshore Crypto Exchange",
+            amount=float(amount),
+            platform="RTGS",
+            payment_status="success",
+            reference_number=generate_reference_number("RTGS", self.rng),
+            balance_before=float(bal_before),
+            balance_after=bal_after,
+            txn_timestamp=self._ts(timestamp),
+            currency="USD",
+            receiver_country="US",
+            receiver_vpa=None
+        )
+
     def _build_custom(self, customer: Dict[str, Any], ov: Dict, timestamp: Optional[datetime] = None) -> TransactionEvent:
         """Build a transaction with manual field overrides."""
         monthly  = float(customer.get("monthly_income", 50000))
@@ -519,7 +551,7 @@ class RealTimeInjector:
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--mode",      choices=["random", "stress", "recovery"], default="random")
+    p.add_argument("--mode",      choices=["random", "stress", "recovery", "fraud"], default="random")
     p.add_argument("--tps",       type=float, default=2.0)
     p.add_argument("--total",     type=int,   default=50)
     p.add_argument("--customers", type=int,   default=20)

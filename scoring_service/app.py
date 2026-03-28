@@ -21,9 +21,11 @@ from typing import List, Optional, Any, Dict
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import jwt
 
 from config.settings import get_settings
 from schemas.transaction_event import TransactionEvent
@@ -369,72 +371,107 @@ if __name__ == "__main__":
 
 # ── Additional endpoints for dashboard (Layer 7) ──────────────────────────────
 
+JWT_SECRET = "sentinel_jwt_secret_v2_2026"
+security = HTTPBearer()
+
+def get_current_admin(credentials: HTTPAuthorizationCredentials = Security(security)):
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        return payload.get("email")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
 @app.post("/auth/login")
 async def login(form_data: dict):
     """
-    Simple demo login. Returns a mock token.
-    In production replace with real JWT auth.
+    JWT authentication.
     """
     email    = form_data.get("username", "")
     password = form_data.get("password", "")
-    if email == "admin@sentinel.bank" and password == "sentinel_admin":
+    
+    admins = [
+        "manjunathmurali20@gmail.com",
+        "testuser1togethr@gmail.com",
+        "tanmay06lko@gmail.com",
+        "sanyogeetapradhan@gmail.com",
+        "sanyogaming25@gmail.com",
+        "sundranidevraj@gmail.com",
+        "rajatdalalpaaji@gmail.com",
+        "akshaysinghpaaji@gmail.com",
+        "sohanj9106@gmail.com",
+        "sohan2.9106@gmail.com"
+    ]
+    
+    if email in admins and password == "admin@123":
+        token = jwt.encode({"email": email, "role": "admin"}, JWT_SECRET, algorithm="HS256")
         return {
-            "access_token": "sentinel_demo_token_v2",
-            "role":         "credit_officer",
-            "full_name":    "Credit Officer",
+            "access_token": token,
+            "role":         "admin",
+            "full_name":    email.split("@")[0].title(),
         }
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
 @app.get("/portfolio/metrics")
-async def get_portfolio_metrics():
+async def get_portfolio_metrics(admin_email: str = Depends(get_current_admin)):
     """Portfolio-level KPIs for the dashboard header."""
     conn = _get_db()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         # Total customers
-        cursor.execute("SELECT COUNT(*) AS total FROM customers")
+        cursor.execute("SELECT COUNT(*) AS total FROM customers WHERE admin_email = %s", (admin_email,))
         total = cursor.fetchone()["total"]
 
         # Latest pulse score per customer → tier distribution
         cursor.execute("""
             SELECT risk_label, COUNT(*) AS cnt
             FROM (
-                SELECT DISTINCT ON (customer_id)
-                    customer_id, risk_label
-                FROM pulse_scores
-                ORDER BY customer_id, score_ts DESC
+                SELECT DISTINCT ON (ps.customer_id)
+                    ps.customer_id, ps.risk_label
+                FROM pulse_scores ps
+                JOIN customers c ON c.customer_id = ps.customer_id
+                WHERE c.admin_email = %s
+                ORDER BY ps.customer_id, ps.score_ts DESC
             ) latest
             GROUP BY risk_label
-        """)
+        """, (admin_email,))
         tiers = {r["risk_label"]: int(r["cnt"]) for r in cursor.fetchall()}
 
         # Average pulse score
         cursor.execute("""
             SELECT ROUND(AVG(pulse_score)::numeric, 4) AS avg_score
             FROM (
-                SELECT DISTINCT ON (customer_id)
-                    customer_id, pulse_score
-                FROM pulse_scores
-                ORDER BY customer_id, score_ts DESC
+                SELECT DISTINCT ON (ps.customer_id)
+                    ps.customer_id, ps.pulse_score
+                FROM pulse_scores ps
+                JOIN customers c ON c.customer_id = ps.customer_id
+                WHERE c.admin_email = %s
+                ORDER BY ps.customer_id, ps.score_ts DESC
             ) latest
-        """)
+        """, (admin_email,))
         avg_row = cursor.fetchone()
         avg_score = float(avg_row["avg_score"]) if avg_row["avg_score"] else 0.0
 
         # Customers scored
         cursor.execute("""
-            SELECT COUNT(DISTINCT customer_id) AS scored FROM pulse_scores
-        """)
+            SELECT COUNT(DISTINCT ps.customer_id) AS scored 
+            FROM pulse_scores ps
+            JOIN customers c ON c.customer_id = ps.customer_id
+            WHERE c.admin_email = %s
+        """, (admin_email,))
         scored = cursor.fetchone()["scored"]
 
         # Recent high-severity events (last 24h)
         cursor.execute("""
-            SELECT COUNT(*) AS cnt FROM transaction_pulse_events
-            WHERE event_ts > NOW() - INTERVAL '24 hours'
-              AND txn_severity >= 0.55
-        """)
+            SELECT COUNT(*) AS cnt 
+            FROM transaction_pulse_events tpe
+            JOIN customers c ON c.customer_id = tpe.customer_id
+            WHERE tpe.event_ts > NOW() - INTERVAL '24 hours'
+              AND tpe.txn_severity >= 0.55
+              AND c.admin_email = %s
+        """, (admin_email,))
         high_sev_24h = cursor.fetchone()["cnt"]
 
         cursor.close()
@@ -456,6 +493,7 @@ async def get_portfolio_metrics():
 
 @app.get("/customers")
 async def get_customers(
+    admin_email: str = Depends(get_current_admin),
     risk_label: Optional[str] = Query(default=None),
     search:     Optional[str] = Query(default=None),
     limit:      int           = Query(default=100, le=1500),
@@ -470,8 +508,8 @@ async def get_customers(
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         # Build query
-        where_clauses = []
-        params: list = []
+        where_clauses = ["c.admin_email = %s"]
+        params: list = [admin_email]
 
         if risk_label and risk_label != "all":
             where_clauses.append("ps.risk_label = %s")
@@ -621,7 +659,7 @@ async def get_customer_profile(customer_id: str):
 
 
 @app.get("/interventions/pending")
-async def get_pending_interventions():
+async def get_pending_interventions(admin_email: str = Depends(get_current_admin)):
     """
     Returns customers in HIGH or CRITICAL risk tier who have NOT received
     an intervention email in the current calendar week.
@@ -639,13 +677,14 @@ async def get_pending_interventions():
             ) ps
             JOIN customers c ON c.customer_id = ps.customer_id
             WHERE ps.risk_tier <= 2
+            AND c.admin_email = %s
             AND NOT EXISTS (
                 SELECT 1
                 FROM interventions i
                 WHERE i.customer_id = ps.customer_id
                   AND i.sent_at >= NOW() - INTERVAL '7 days'
             )
-        """)
+        """, (admin_email,))
         rows = cursor.fetchall()
         return {
             "total": len(rows),
@@ -1094,9 +1133,9 @@ async def get_psi_air_monitoring():
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # Fetch PSI monitoring data
+        # Fetch PSI monitoring data (Latest per feature)
         cursor.execute("""
-            SELECT
+            SELECT DISTINCT ON (feature_name)
                 feature_name,
                 metric_value as psi_value,
                 status as psi_status,
@@ -1104,14 +1143,13 @@ async def get_psi_air_monitoring():
                 details
             FROM model_monitoring
             WHERE monitor_type = 'PSI'
-            ORDER BY monitored_at DESC, feature_name ASC
-            LIMIT 100
+            ORDER BY feature_name ASC, monitored_at DESC
         """)
         psi_rows = cursor.fetchall()
         
-        # Fetch AIR monitoring data
+        # Fetch AIR monitoring data (Latest per feature)
         cursor.execute("""
-            SELECT
+            SELECT DISTINCT ON (feature_name)
                 feature_name as air_group,
                 metric_value as air_value,
                 status as air_status,
@@ -1119,8 +1157,7 @@ async def get_psi_air_monitoring():
                 details
             FROM model_monitoring
             WHERE monitor_type = 'AIR'
-            ORDER BY monitored_at DESC, feature_name ASC
-            LIMIT 100
+            ORDER BY feature_name ASC, monitored_at DESC
         """)
         air_rows = cursor.fetchall()
         
@@ -1132,7 +1169,7 @@ async def get_psi_air_monitoring():
         latest = cursor.fetchone()
         
         return {
-            "latest_update": latest["latest_update"].isoformat() if latest["latest_update"] else None,
+            "latest_update": latest["latest_update"].isoformat() if latest and latest["latest_update"] else None,
             "psi": [
                 {
                     "feature_name": r["feature_name"],
