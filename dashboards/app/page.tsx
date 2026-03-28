@@ -7,13 +7,6 @@ export default function LandingPage() {
       <nav className="fixed top-0 w-full z-50 bg-white/40 backdrop-blur-xl shadow-sm bg-opacity-30">
         <div className="flex justify-between items-center max-w-7xl mx-auto px-6 h-20">
           <div className="text-xl font-bold tracking-tighter text-blue-700 font-headline">Sentinel AI</div>
-          <div className="hidden md:flex items-center gap-8">
-            <Link className="text-blue-700 border-b-2 border-blue-600 pb-1 font-headline tracking-tight text-sm font-semibold" href="#">Solutions</Link>
-            <Link className="text-slate-600 hover:text-blue-600 transition-colors font-headline tracking-tight text-sm font-semibold" href="#">Risk Engine</Link>
-            <Link className="text-slate-600 hover:text-blue-600 transition-colors font-headline tracking-tight text-sm font-semibold" href="#">Intelligence</Link>
-            <Link className="text-slate-600 hover:text-blue-600 transition-colors font-headline tracking-tight text-sm font-semibold" href="#">Institutional</Link>
-            <Link className="text-slate-600 hover:text-blue-600 transition-colors font-headline tracking-tight text-sm font-semibold" href="#">Pricing</Link>
-          </div>
           <div className="flex items-center gap-4">
             <Link href="/login" className="text-slate-600 font-headline text-sm font-semibold px-4 py-2 hover:opacity-80 transition-opacity">Login</Link>
             <Link href="/dashboard" className="bg-primary text-on-primary px-6 py-2.5 rounded-xl font-headline text-sm font-bold shadow-lg shadow-primary/20 active:scale-95 transition-all">Get Started</Link>
@@ -37,8 +30,8 @@ export default function LandingPage() {
                 Next-Gen Risk Engine
               </div>
               <h1 className="text-6xl lg:text-7xl font-headline font-extrabold tracking-tighter text-on-surface leading-[1.05]">
-                Smart Risk <br/>
-                <span className="text-primary">Intervention</span> <br/>
+                Smart Risk <br />
+                <span className="text-primary">Intervention</span> <br />
                 Solutions
               </h1>
               <p className="text-xl text-on-secondary-container max-w-xl leading-relaxed">
@@ -51,9 +44,9 @@ export default function LandingPage() {
                 </Link>
                 <div className="flex items-center gap-4 px-6">
                   <div className="flex -space-x-3">
-                    <div className="w-10 h-10 rounded-full border-2 border-white bg-slate-200"></div>
-                    <div className="w-10 h-10 rounded-full border-2 border-white bg-slate-300"></div>
-                    <div className="w-10 h-10 rounded-full border-2 border-white bg-slate-400"></div>
+                    <img src="https://randomuser.me/api/portraits/men/32.jpg" alt="User" className="w-10 h-10 rounded-full border-2 border-white object-cover" />
+                    <img src="https://randomuser.me/api/portraits/women/44.jpg" alt="User" className="w-10 h-10 rounded-full border-2 border-white object-cover" />
+                    <img src="https://randomuser.me/api/portraits/men/86.jpg" alt="User" className="w-10 h-10 rounded-full border-2 border-white object-cover" />
                   </div>
                   <span className="text-sm font-semibold text-secondary">Joined by 400+ Institutions</span>
                 </div>
@@ -96,20 +89,20 @@ export default function LandingPage() {
         </section>
 
         {/* Stats Strip */}
-        <section className="bg-surface-container-low/50 py-16 text-slate-800">
+        <section className="bg-blue-800 py-16 text-white">
           <div className="max-w-7xl mx-auto px-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-12 text-center">
               <div className="space-y-2">
-                <div className="text-5xl font-headline font-extrabold text-primary">25%</div>
-                <div className="text-sm font-bold text-secondary uppercase tracking-widest">NPL Reduction</div>
+                <div className="text-5xl font-headline font-extrabold text-white">25%</div>
+                <div className="text-sm font-bold text-white uppercase tracking-widest">NPL Reduction</div>
               </div>
               <div className="space-y-2">
-                <div className="text-5xl font-headline font-extrabold text-primary">15%</div>
-                <div className="text-sm font-bold text-secondary uppercase tracking-widest">Lower Collection Costs</div>
+                <div className="text-5xl font-headline font-extrabold text-white">15%</div>
+                <div className="text-sm font-bold text-white uppercase tracking-widest">Lower Collection Costs</div>
               </div>
               <div className="space-y-2">
-                <div className="text-5xl font-headline font-extrabold text-primary">9.2 Days</div>
-                <div className="text-sm font-bold text-secondary uppercase tracking-widest">Earlier Detection</div>
+                <div className="text-5xl font-headline font-extrabold text-white">9.2 Days</div>
+                <div className="text-sm font-bold text-white uppercase tracking-widest">Earlier Detection</div>
               </div>
             </div>
           </div>
@@ -180,7 +173,7 @@ export default function LandingPage() {
 
             <div className="order-1 lg:order-2 space-y-8">
               <h2 className="text-5xl font-headline font-extrabold tracking-tight text-on-surface leading-tight">
-                Institutional Grade <br/>
+                Institutional Grade <br />
                 <span className="text-primary">Intelligence</span>
               </h2>
               <p className="text-lg text-on-secondary-container leading-relaxed">
