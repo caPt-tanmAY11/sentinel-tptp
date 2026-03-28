@@ -184,14 +184,14 @@ class PulseEngine:
 
             # Step 5: Model inference → severity
             import numpy as np
-            x     = np.array([delta_feats.get(f, 0.0) for f in DELTA_FEATURE_NAMES], dtype=np.float32)
             model = self._get_model()
             if model and model.is_loaded:
-                raw_prob = float(model.predict_single(x))
-                # BLEND: 40% ML Customer Profile Risk + 60% Semantic Transaction Risk
-                # Ensures a Grocery txn (0.0 weight) visibly drops severity vs Lending App (0.85 weight)
-                severity = (raw_prob * 0.5) + (category.stress_weight * 0.5)
+                # Use exactly the features the model was trained on to avoid shape mismatches
+                feature_names = model.model.feature_name()
+                x = np.array([delta_feats.get(f, 0.0) for f in feature_names], dtype=np.float32)
+                severity = float(model.predict_single(x))
             else:
+                x = np.array([delta_feats.get(f, 0.0) for f in DELTA_FEATURE_NAMES], dtype=np.float32)
                 severity = float(category.stress_weight)  # fallback
 
             # Step 5b: Apply CIBIL modifier to severity before direction/delta
@@ -323,7 +323,9 @@ class PulseEngine:
             shap_vals = model.get_shap_values(x.reshape(1, -1))
             arr = shap_vals[0] if hasattr(shap_vals, '__len__') else shap_vals
             idx = sorted(range(len(arr)), key=lambda i: abs(float(arr[i])), reverse=True)[:5]
-            return [{"feature": DELTA_FEATURE_NAMES[i],
+            
+            fnames = model.model.feature_name() if hasattr(model, 'model') and hasattr(model.model, 'feature_name') else DELTA_FEATURE_NAMES
+            return [{"feature": fnames[i] if i < len(fnames) else f"feature_{i}",
                      "shap": round(float(arr[i]), 4),
                      "direction": "stress" if float(arr[i]) > 0 else "relief"}
                     for i in idx]
