@@ -59,6 +59,7 @@ export function Sidebar() {
         <NavItem icon="bolt"        label="Interventions"  href="/dashboard/interventions" active={pathname?.startsWith('/dashboard/interventions')} />
         <NavItem icon="assessment"  label="Reports"        href="/dashboard/report" active={pathname?.startsWith('/dashboard/report')} />
         <NavItem icon="forum"       label="Grievances"     href="/dashboard/grievances" active={pathname?.startsWith('/dashboard/grievances')} />
+        <NavItem icon="delivery_dining" label="Gig Workers"   href="/dashboard/gig-workers" active={pathname?.startsWith('/dashboard/gig-workers')} />
       </nav>
 
 

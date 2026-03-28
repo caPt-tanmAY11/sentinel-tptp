@@ -670,5 +670,28 @@ CREATE INDEX IF NOT EXISTS idx_gig_weekly_wow
 -- =====================================================================
 -- END OF SCHEMA
 -- =====================================================================
+ALTER TABLE customers
+ADD COLUMN IF NOT EXISTS admin_email TEXT;
+
+UPDATE customers
+SET admin_email = emails[
+    floor(random()*array_length(emails, 1))::int + 1
+]
+FROM (
+    SELECT ARRAY[
+        'manjunathmurali20@gmail.com',
+        'testuser1togethr@gmail.com',
+        'tanmay06lko@gmail.com',
+        'sanyogeetapradhan@gmail.com',
+        'sanyogaming25@gmail.com',
+        'sundranidevraj@gmail.com',
+        'rajatdalalpaaji@gmail.com',
+        'akshaysinghpaaji@gmail.com',
+        'sohanj9106@gmail.com',
+        'sohan2.9106@gmail.com'
+    ] AS emails
+) t;    
+
 
 COMMIT;
+
