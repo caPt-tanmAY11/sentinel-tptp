@@ -39,6 +39,7 @@ LGBM_PARAMS: Dict[str, Any] = {
     "n_jobs":           -1,
     "deterministic":     True,
     "seed":              42,
+    "is_unbalance":      True,
 }
 
 
@@ -64,7 +65,9 @@ class SentinelLightGBM:
 
         n_pos = int(np.sum(y_train == 1))
         n_neg = int(np.sum(y_train == 0))
-        params = {**LGBM_PARAMS, "scale_pos_weight": n_neg / max(n_pos, 1)}
+        params = {**LGBM_PARAMS}
+        if not params.get("is_unbalance", False):
+            params["scale_pos_weight"] = n_neg / max(n_pos, 1)
 
         dtrain = lgb.Dataset(X_train, label=y_train, feature_name=self.feature_names)
         dval   = lgb.Dataset(X_val,   label=y_val,   feature_name=self.feature_names,

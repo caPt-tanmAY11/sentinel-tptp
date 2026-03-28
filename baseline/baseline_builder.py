@@ -233,4 +233,54 @@ def get_baseline(
     finally:
         if close_conn:
             conn.close()
-            
+
+
+def batch_get_baselines(
+    customer_ids: list,
+    conn=None,
+) -> Dict[str, "CustomerBaseline"]:
+    """
+    Fetch active baselines for multiple customers in a single query.
+
+    Returns:
+        Dict of {customer_id: CustomerBaseline} for all customers that have
+        an active baseline. Customers without baselines are omitted.
+    """
+    if not customer_ids:
+        return {}
+
+    close_conn = conn is None
+    if conn is None:
+        conn = _get_db()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT DISTINCT ON (customer_id) *
+            FROM customer_baselines
+            WHERE customer_id = ANY(%s::uuid[]) AND is_active = TRUE
+            ORDER BY customer_id, computed_at DESC
+        """, (customer_ids,))
+        rows = cursor.fetchall()
+        cursor.close()
+
+        result: Dict[str, CustomerBaseline] = {}
+        for row in rows:
+            cid = str(row["customer_id"])
+            result[cid] = CustomerBaseline(
+                customer_id=cid,
+                computed_at=row["computed_at"],
+                window_days=int(row["window_days"]),
+                history_start_date=str(row["history_start_date"]) if row["history_start_date"] else None,
+                history_end_date=str(row["history_end_date"])     if row["history_end_date"]   else None,
+                transaction_count=int(row["transaction_count"]),
+                low_confidence=bool(row["low_confidence"]),
+                feature_means=row["feature_means"] or {},
+                feature_stds=row["feature_stds"]   or {},
+                feature_p25=row["feature_p25"]     or {},
+                feature_p75=row["feature_p75"]     or {},
+                feature_p95=row["feature_p95"]     or {},
+            )
+        return result
+    finally:
+        if close_conn:
+            conn.close()

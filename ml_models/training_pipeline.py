@@ -25,15 +25,16 @@ DATA SPLIT:
 from __future__ import annotations
 import json
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Tuple, List, Optional
 import numpy as np
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from config.settings import get_settings
-from feature_engine.features import compute_all_features
+from feature_engine.features import compute_all_features_from_data
 from feature_engine.delta_features import compute_delta_features, DELTA_FEATURE_NAMES
-from baseline.baseline_builder import get_baseline
+from baseline.baseline_builder import batch_get_baselines
 from enrichment.transaction_classifier import classify_transaction
 from ml_models.lightgbm_model import SentinelLightGBM
 settings = get_settings()
@@ -43,31 +44,18 @@ def _get_db():
         database=settings.POSTGRES_DB, user=settings.POSTGRES_USER,
         password=settings.POSTGRES_PASSWORD,
     )
-def _build_label(customer_id: str, cursor) -> int:
-    """
-    Label = 1 if customer shows delinquency signals.
-    Derived purely from observable database outcomes.
-    """
-    cursor.execute("""
-        SELECT MAX(days_past_due)            AS max_dpd,
-               MAX(failed_auto_debit_count_30d) AS max_failed
-        FROM loans
-        WHERE customer_id = %s AND status = 'ACTIVE'
-    """, (customer_id,))
-    row = cursor.fetchone()
-    if not row:
-        return 0
-    max_dpd    = int(row["max_dpd"]    or 0)
-    max_failed = int(row["max_failed"] or 0)
-    return 1 if (max_dpd >= 1 or max_failed >= 2) else 0
 def build_training_dataset(
     conn=None,
     max_customers: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
     Build (X, y) from real-time window transactions.
-    FIX (Bug 4): Rows are now sorted by txn_timestamp before being returned
+
+    OPTIMISED: Uses 6 batch queries upfront instead of per-transaction DB calls.
+
+    FIX (Bug 4): Rows are sorted by txn_timestamp before being returned
     so that the downstream 80/20 split produces a true temporal validation set.
+
     Returns:
         X:    (n_samples, 48) float32 array — sorted by txn_timestamp ASC
         y:    (n_samples,)   int32 binary labels
@@ -81,43 +69,141 @@ def build_training_dataset(
         now    = datetime.now(timezone.utc)
         # Real-time window: last 30 days
         rt_start = now - timedelta(days=30)
+        # Features look back 90 days from each txn_ts.
+        # Earliest txn_ts can be rt_start, so we need txns from rt_start - 90d.
+        full_window_start = rt_start - timedelta(days=90)
+
+        # ── BATCH QUERY 1: Customer list ──────────────────────────────────────
         cursor.execute("""
             SELECT customer_id FROM customers ORDER BY customer_id LIMIT %s
         """, (max_customers or 999999,))
         customers = [str(r["customer_id"]) for r in cursor.fetchall()]
         print(f"  Building dataset for {len(customers)} customers...")
+
+        # ── BATCH QUERY 2: Customer metadata ──────────────────────────────────
+        cursor.execute("""
+            SELECT customer_id, monthly_income, expected_salary_day,
+                   customer_vintage_months, historical_delinquency_count,
+                   geography_risk_tier, account_number
+            FROM customers WHERE customer_id = ANY(%s::uuid[])
+        """, (customers,))
+        customer_info = {str(r["customer_id"]): dict(r) for r in cursor.fetchall()}
+        print(f"    Fetched metadata for {len(customer_info)} customers")
+
+        # ── BATCH QUERY 3: All baselines ──────────────────────────────────────
+        baselines = batch_get_baselines(customers, conn=conn)
+        print(f"    Fetched {len(baselines)} baselines")
+
+        # ── BATCH QUERY 4: All labels (from loans table) ─────────────────────
+        cursor.execute("""
+            SELECT customer_id,
+                   MAX(days_past_due)            AS max_dpd,
+                   MAX(failed_auto_debit_count_30d) AS max_failed
+            FROM loans
+            WHERE customer_id = ANY(%s::uuid[]) AND status = 'ACTIVE'
+            GROUP BY customer_id
+        """, (customers,))
+        label_map: Dict[str, int] = {}
+        for row in cursor.fetchall():
+            cid = str(row["customer_id"])
+            max_dpd    = int(row["max_dpd"]    or 0)
+            max_failed = int(row["max_failed"] or 0)
+            label_map[cid] = 1 if (max_dpd >= 1 or max_failed >= 2) else 0
+        print(f"    Fetched labels for {len(label_map)} customers")
+
+        # ── BATCH QUERY 5: ALL transactions (full window) ─────────────────────
+        cursor.execute("""
+            SELECT customer_id, sender_id, sender_name, receiver_id, receiver_name,
+                   amount, platform, payment_status,
+                   balance_before, balance_after, txn_timestamp
+            FROM transactions
+            WHERE customer_id = ANY(%s::uuid[])
+              AND txn_timestamp > %s AND txn_timestamp <= %s
+            ORDER BY customer_id, txn_timestamp ASC
+        """, (customers, full_window_start, now))
+        all_txns: Dict[str, list] = defaultdict(list)
+        txn_count = 0
+        for row in cursor.fetchall():
+            all_txns[str(row["customer_id"])].append(dict(row))
+            txn_count += 1
+        print(f"    Fetched {txn_count:,} transactions for {len(all_txns)} customers")
+
+        # ── BATCH QUERY 6: Loans + credit card aggregates ─────────────────────
+        cursor.execute("""
+            SELECT customer_id,
+                   COALESCE(SUM(outstanding_principal), 0) AS debt,
+                   COALESCE(SUM(emi_amount), 0)            AS emi,
+                   COUNT(*)                                AS loans
+            FROM loans
+            WHERE customer_id = ANY(%s::uuid[]) AND status = 'ACTIVE'
+            GROUP BY customer_id
+        """, (customers,))
+        loans_agg: Dict[str, dict] = {}
+        for row in cursor.fetchall():
+            loans_agg[str(row["customer_id"])] = dict(row)
+
+        cursor.execute("""
+            SELECT customer_id,
+                   COALESCE(AVG(credit_utilization_pct), 0) AS util,
+                   COUNT(*)                                 AS cards
+            FROM credit_cards
+            WHERE customer_id = ANY(%s::uuid[]) AND status = 'ACTIVE'
+            GROUP BY customer_id
+        """, (customers,))
+        cards_agg: Dict[str, dict] = {}
+        for row in cursor.fetchall():
+            cards_agg[str(row["customer_id"])] = dict(row)
+        print(f"    Fetched loan/card aggregates")
+
+        cursor.close()
+
+        # ── Build training samples (in-memory, zero DB queries) ───────────────
         X_rows, y_rows, cid_rows, ts_rows = [], [], [], []
         skipped = 0
+        default_loans = {"debt": 0, "emi": 0, "loans": 0}
+        default_cards = {"util": 0, "cards": 0}
+
         for i, cid in enumerate(customers):
-            # Baseline must exist (built from days 1-90)
-            baseline = get_baseline(cid, conn=conn)
+            baseline = baselines.get(cid)
             if baseline is None:
                 skipped += 1
                 continue
-            # Fetch only real-time window transactions (days 91-120)
-            cursor.execute("""
-                SELECT sender_id, sender_name, receiver_id, receiver_name,
-                       amount, platform, payment_status,
-                       balance_before, balance_after, txn_timestamp
-                FROM transactions
-                WHERE customer_id = %s
-                  AND txn_timestamp > %s AND txn_timestamp <= %s
-                ORDER BY txn_timestamp ASC
-            """, (cid, rt_start, now))
-            rt_txns = cursor.fetchall()
+
+            cust_info = customer_info.get(cid)
+            if cust_info is None:
+                skipped += 1
+                continue
+
+            cust_txns = all_txns.get(cid, [])
+            # Filter to real-time window transactions only
+            rt_txns = [
+                t for t in cust_txns
+                if rt_start < t["txn_timestamp"] <= now
+            ]
             if not rt_txns:
                 skipped += 1
                 continue
-            label = _build_label(cid, cursor)
+
+            label = label_map.get(cid, 0)
+            acct_num = cust_info.get("account_number") or ""
+            cust_loans = loans_agg.get(cid, default_loans)
+            cust_cards = cards_agg.get(cid, default_cards)
+
             for txn in rt_txns:
-                txn_dict = dict(txn)
-                txn_ts   = txn["txn_timestamp"]
+                txn_ts = txn["txn_timestamp"]
                 try:
-                    current_feats = compute_all_features(cid, as_of=txn_ts, conn=conn)
+                    current_feats = compute_all_features_from_data(
+                        customer_info=cust_info,
+                        all_customer_txns=cust_txns,
+                        loans_agg=cust_loans,
+                        cards_agg=cust_cards,
+                        as_of=txn_ts,
+                        account_number=acct_num,
+                    )
                 except Exception:
                     continue
-                cat = classify_transaction(txn_dict)
-                delta = compute_delta_features(current_feats, baseline, txn_dict, cat)
+                cat = classify_transaction(txn)
+                delta = compute_delta_features(current_feats, baseline, txn, cat)
                 x = np.array(
                     [delta.get(f, 0.0) for f in DELTA_FEATURE_NAMES],
                     dtype=np.float32,
@@ -136,7 +222,7 @@ def build_training_dataset(
                 ts_rows.append(raw_ts)
             if (i + 1) % 100 == 0:
                 print(f"    {i+1}/{len(customers)} customers — {len(X_rows)} samples")
-        cursor.close()
+
         if not X_rows:
             raise ValueError("No training samples built. Run --step baselines first.")
         # ── FIX: Sort all rows by txn_timestamp ascending ────────────────────
