@@ -158,6 +158,25 @@ BBPS_UTILITY_VPAS: list = [
     "pgvcl@bbps",
 ]
 
+# Known UPI VPA patterns for gig platform payouts
+# Used by transaction classifier to identify gig income credits
+GIG_PLATFORM_VPA_PATTERNS: list = [
+    "ubereats@",
+    "oladriver@",
+    "swiggypartner@",
+    "zomatodeliver@",
+    "blinkitdelivery@",
+    "zepto@okaxis",
+    "dunzopartner@",
+    "uclap@",
+    "porterpartner@",
+    "rapidopartner@",
+    "taskmo@",
+    "workindia@",
+    "gigworks@",
+    "meesho_partner@",
+]
+
 # NACH/ECS EMI auto-debit patterns (partial receiver_id)
 NACH_EMI_PATTERNS: list = [
     "@nach",

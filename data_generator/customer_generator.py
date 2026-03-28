@@ -78,6 +78,16 @@ INCOME_DISTRIBUTIONS: Dict[str, Dict[str, Dict[str, float]]] = {
         "SME":          {"mean": 35_000,  "std": 15_000,  "min": 10_000,  "max": 80_000},
         "MICROFINANCE": {"mean": 8_000,   "std": 3_000,   "min": 3_000,   "max": 20_000},
     },
+    # Gig workers: high income volatility, lower mean than salaried equivalents.
+    # Income represents estimated monthly earnings across all platforms.
+    # Indian gig economy 2024: delivery/ride-share workers earn ₹15k–₹45k/month,
+    # urban skilled gig workers (Urban Company, etc.) earn up to ₹80k.
+    "GIG_WORKER": {
+        "RETAIL":       {"mean": 22_000,  "std": 10_000,  "min": 8_000,   "max": 80_000},
+        "HNI":          {"mean": 80_000,  "std": 30_000,  "min": 40_000,  "max": 250_000},
+        "SME":          {"mean": 35_000,  "std": 15_000,  "min": 12_000,  "max": 150_000},
+        "MICROFINANCE": {"mean": 10_000,  "std": 4_000,   "min": 3_500,   "max": 22_000},
+    },
 }
 # Employer pools by sector
 EMPLOYER_POOLS: Dict[str, List[str]] = {
@@ -118,16 +128,33 @@ SEGMENT_WEIGHTS = {
     "HNI":          0.08,
     "MICROFINANCE": 0.07,
 }
+# Indian gig platforms with payout VPAs (used in transaction generation)
+# Format: (sender_vpa, display_name)
+GIG_EMPLOYER_POOLS: list = [
+    ("ubereats@upi",          "Uber Driver Payout"),
+    ("oladriver@icicibank",   "Ola Driver Settlement"),
+    ("swiggypartner@ybl",     "Swiggy Delivery Partner Payout"),
+    ("zomatodeliver@axl",     "Zomato Delivery Partner Payout"),
+    ("blinkitdelivery@upi",   "Blinkit Delivery Partner Payout"),
+    ("zepto@okaxis",          "Zepto Delivery Partner Payout"),
+    ("dunzopartner@okaxis",   "Dunzo Partner Payout"),
+    ("uclap@ybl",             "Urban Company Partner Payout"),
+    ("porterpartner@upi",     "Porter Partner Payout"),
+    ("rapidopartner@upi",     "Rapido Bike Partner Payout"),
+    ("taskmo@icicibank",      "Taskmo Gig Payout"),
+    ("workindia@ybl",         "WorkIndia Gig Payout"),
+    ("gigworks@upi",          "GigWorks Platform Payout"),
+    ("meesho_partner@upi",    "Meesho Reseller Payout"),
+]
+
 # Employment type probabilities by segment
+# GIG_WORKER added: 8% of RETAIL, 5% of SME, 2% of HNI, 12% of MICROFINANCE
+# Proportions redistributed from SALARIED and SELF_EMPLOYED
 EMPLOYMENT_WEIGHTS = {
-    "RETAIL":       {"SALARIED": 0.65, "SELF_EMPLOYED": 0.20, "BUSINESS_OWNER": 0.10, "RETIRED":
-0.05},
-    "HNI":          {"SALARIED": 0.40, "SELF_EMPLOYED": 0.25, "BUSINESS_OWNER": 0.30, "RETIRED":
-0.05},
-    "SME":          {"SALARIED": 0.30, "SELF_EMPLOYED": 0.35, "BUSINESS_OWNER": 0.30, "RETIRED":
-0.05},
-    "MICROFINANCE": {"SALARIED": 0.40, "SELF_EMPLOYED": 0.45, "BUSINESS_OWNER": 0.10, "RETIRED":
-0.05},
+    "RETAIL":       {"SALARIED": 0.57, "SELF_EMPLOYED": 0.18, "BUSINESS_OWNER": 0.10, "RETIRED": 0.05, "GIG_WORKER": 0.10},
+    "HNI":          {"SALARIED": 0.38, "SELF_EMPLOYED": 0.24, "BUSINESS_OWNER": 0.30, "RETIRED": 0.05, "GIG_WORKER": 0.03},
+    "SME":          {"SALARIED": 0.27, "SELF_EMPLOYED": 0.33, "BUSINESS_OWNER": 0.30, "RETIRED": 0.05, "GIG_WORKER": 0.05},
+    "MICROFINANCE": {"SALARIED": 0.33, "SELF_EMPLOYED": 0.38, "BUSINESS_OWNER": 0.10, "RETIRED": 0.04, "GIG_WORKER": 0.15},
 }
 # Loan probability and count by segment
 LOAN_CONFIG = {
@@ -240,6 +267,11 @@ def generate_customer(
         sector = rng.choice(list(EMPLOYER_POOLS.keys()))
         employer_name = rng.choice(EMPLOYER_POOLS[sector])
         employer_id = f"EMP_{employer_name[:4].upper()}_{rng.randint(1000, 9999)}"
+    elif employment_type == "GIG_WORKER":
+        # Gig workers are affiliated with one or two primary platforms
+        gig_vpa, gig_display = rng.choice(GIG_EMPLOYER_POOLS)
+        employer_name = gig_display          # e.g. "Swiggy Delivery Partner Payout"
+        employer_id   = f"GIG_{gig_vpa[:6].upper().replace('@','_')}_{rng.randint(1000, 9999)}"
     # ── Expected salary / pension day
     if employment_type == "SALARIED":
         expected_salary_day = rng.choice([1, 5, 7, 10, 25, 28, 30])
@@ -247,6 +279,10 @@ def generate_customer(
         expected_salary_day = rng.choice([1, 5, 10])
     elif employment_type == "BUSINESS_OWNER":
         expected_salary_day = rng.choice([1, 15])
+    elif employment_type == "GIG_WORKER":
+        # Gig workers receive weekly platform payouts (days 7, 14, 21, 28)
+        # expected_salary_day marks the first weekly payout day of the month
+        expected_salary_day = 7
     else:  # RETIRED — pension credited on 5th
         expected_salary_day = 5
     # ── Account open date (customer vintage)

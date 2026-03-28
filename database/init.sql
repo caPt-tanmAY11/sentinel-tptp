@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS customers (
 
     -- Employment & Income
     employment_type         VARCHAR(30) NOT NULL CHECK (employment_type IN (
-                                'SALARIED', 'SELF_EMPLOYED', 'BUSINESS_OWNER', 'RETIRED')),
+                                'SALARIED', 'SELF_EMPLOYED', 'BUSINESS_OWNER', 'RETIRED', 'GIG_WORKER')),
     employer_id             VARCHAR(50),
     employer_name           VARCHAR(200),
     monthly_income          DECIMAL(15,2) NOT NULL,
@@ -135,7 +135,7 @@ CREATE INDEX idx_credit_cards_customer ON credit_cards(customer_id);
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS transactions (
     transaction_id          UUID DEFAULT uuid_generate_v4(),
-    customer_id             UUID NOT NULL REFERENCES customers(customer_id),
+    customer_id             UUID NOT NULL REFERENCES customers(customer_id) ON DELETE CASCADE,
     account_number          VARCHAR(20) NOT NULL,
 
     -- Counterparty (raw observable facts)
@@ -238,7 +238,7 @@ CREATE UNIQUE INDEX idx_baselines_active
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS transaction_pulse_events (
     event_id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    customer_id             UUID NOT NULL REFERENCES customers(customer_id),
+    customer_id             UUID NOT NULL REFERENCES customers(customer_id) ON DELETE CASCADE,
     transaction_id          UUID NOT NULL,
     event_ts                TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 
@@ -333,7 +333,7 @@ CREATE INDEX idx_monitoring_ts   ON model_monitoring(monitored_at DESC);
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS interventions (
     intervention_id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    customer_id             UUID NOT NULL REFERENCES customers(customer_id),
+    customer_id             UUID NOT NULL REFERENCES customers(customer_id) ON DELETE CASCADE,
     risk_tier               VARCHAR(20) NOT NULL,
     sent_at                 TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     status                  VARCHAR(20) DEFAULT 'SENT' CHECK (status IN ('SENT', 'ACKNOWLEDGED')),
@@ -352,8 +352,8 @@ CREATE INDEX idx_interventions_customer ON interventions(customer_id);
 CREATE TABLE IF NOT EXISTS grievances (
     grievance_id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     intervention_id     UUID NOT NULL REFERENCES interventions(intervention_id),
-    customer_id         UUID NOT NULL REFERENCES customers(customer_id),
-    customer_name       VARCHAR(255) NOT NULL,
+    customer_id             UUID NOT NULL REFERENCES customers(customer_id) ON DELETE CASCADE,
+    customer_name           VARCHAR(255) NOT NULL,
     message             TEXT NOT NULL,
     status              VARCHAR(20) DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'REVIEWED', 'RESOLVED', 'CLOSED')),
     submitted_at        TIMESTAMP WITH TIME ZONE DEFAULT NOW(),

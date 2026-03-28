@@ -100,6 +100,25 @@ HEALTHCARE_VPAS = [
     ("1mghealth@ybl",        "1mg Health"),
     ("netmeds@icicibank",    "Netmeds"),
 ]
+# ── Gig Platform Payout VPAs ──────────────────────────────────────────────────
+# These are the sender_id values for gig platform weekly settlements.
+# The classifier uses these VPA patterns to identify gig income credits.
+GIG_PLATFORM_VPAS = [
+    ("ubereats@upi",          "Uber Driver Payout"),
+    ("oladriver@icicibank",   "Ola Driver Settlement"),
+    ("swiggypartner@ybl",     "Swiggy Delivery Partner Payout"),
+    ("zomatodeliver@axl",     "Zomato Delivery Partner Payout"),
+    ("blinkitdelivery@upi",   "Blinkit Delivery Partner Payout"),
+    ("zepto@okaxis",          "Zepto Delivery Partner Payout"),
+    ("dunzopartner@okaxis",   "Dunzo Partner Payout"),
+    ("uclap@ybl",             "Urban Company Partner Payout"),
+    ("porterpartner@upi",     "Porter Partner Payout"),
+    ("rapidopartner@upi",     "Rapido Bike Partner Payout"),
+    ("taskmo@icicibank",      "Taskmo Gig Payout"),
+    ("workindia@ybl",         "WorkIndia Gig Payout"),
+    ("gigworks@upi",          "GigWorks Platform Payout"),
+    ("meesho_partner@upi",    "Meesho Reseller Payout"),
+]
 class RawTransactionGenerator:
     """
     Generates a realistic raw transaction stream for one customer
@@ -323,6 +342,58 @@ class RawTransactionGenerator:
                 platform="NEFT",
                 payment_status="success",
                 reference_number=generate_reference_number("NEFT", self.rng),
+                is_credit=True,
+            ))
+        elif self.employment_type == "GIG_WORKER":
+            # Gig workers receive weekly platform payouts on days 7, 14, 21, 28.
+            # Each payout comes from the worker's primary gig platform VPA.
+            # ─────────────────────────────────────────────────────────────────
+            # STRESS SIGNAL (gig-specific):
+            #   Under financial stress, gig income drops abruptly — unlike salaried
+            #   workers where salary is delayed, gig workers earn less due to fewer
+            #   rides/orders, platform deactivation, or health issues.
+            #   Criterion: week-over-week income drop > 50% ⇒ STRESSED.
+            #   We achieve this by applying a shock_floor that immediately cuts
+            #   payouts to ≤45% of baseline from the first payout in the stress window.
+            payout_days = [7, 14, 21, 28]
+            if day_of_month not in payout_days:
+                return txns
+            weekly_base = self.monthly_income / 4.0
+            if stress_intensity > 0.20:
+                # Abrupt income shock — first stressed payout is already <50% of normal.
+                # shock_floor: 0.44 at start of stress → 0.15 at peak.
+                # Upper multiplier capped at 0.92 to guarantee WoW > 50% even when
+                # the previous normal week was near the baseline level.
+                shock_floor = max(0.15, 0.44 - stress_intensity * 0.29)
+                payout_amount = round(
+                    weekly_base * shock_floor * self.np_rng.uniform(0.78, 0.92)
+                )
+            else:
+                # Normal week: payout varies ±25% around weekly base
+                payout_amount = round(weekly_base * self.np_rng.uniform(0.75, 1.25))
+            payout_amount = max(payout_amount, 500)  # floor ₹500
+            # Use the employer_name stored in profile to pick the platform VPA.
+            # Fall back to a random platform if not present.
+            platform_vpa, platform_name = self.rng.choice(GIG_PLATFORM_VPAS)
+            if self.employer_name:
+                # Try to match employer_name to a known VPA
+                for vpa, name in GIG_PLATFORM_VPAS:
+                    if name == self.employer_name:
+                        platform_vpa, platform_name = vpa, name
+                        break
+            txns.append(self._build_txn(
+                current_dt=current_dt + timedelta(
+                    hours=self.rng.randint(9, 18),
+                    minutes=self.rng.randint(0, 59),
+                ),
+                sender_id=platform_vpa,
+                sender_name=platform_name,
+                receiver_id=self.account_number,
+                receiver_name=f"{self.customer['first_name']} {self.customer['last_name']}",
+                amount=payout_amount,
+                platform="UPI",
+                payment_status="success",
+                reference_number=generate_reference_number("UPI", self.rng),
                 is_credit=True,
             ))
         else:
