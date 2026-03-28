@@ -51,6 +51,17 @@ class PulseEngine:
         self._lstm_encoder = None
         self._lstm_loaded  = False
 
+    def _get_lstm_encoder(self):
+        if not self._lstm_loaded:
+            from ml_models.lstm_encoder import load_encoder
+            self._lstm_encoder = load_encoder()
+            self._lstm_loaded = True
+            if self._lstm_encoder:
+                print("  ✓ LSTM encoder loaded for real-time scoring")
+        return self._lstm_encoder
+        self._lstm_encoder = None
+        self._lstm_loaded  = False
+
     def _get_model(self):
         if not self._model_loaded:
             from ml_models.lightgbm_model import SentinelLightGBM
@@ -140,12 +151,17 @@ class PulseEngine:
             else:
                 lstm_emb = None
 
+            # Fetch EMI dates for this customer
+            cursor.execute("SELECT emi_due_date FROM loans WHERE customer_id = %s AND status = 'ACTIVE'", (cid,))
+            emi_dates = [r["emi_due_date"] for r in cursor.fetchall() if r["emi_due_date"] is not None]
+
             delta_feats = compute_delta_features(
                 current_features=current_features,
                 baseline=baseline,
                 transaction=txn_dict,
                 category=category,
                 lstm_embedding=lstm_emb,
+                customer_emi_dates=emi_dates,
             )
 
             # Step 5: Model inference → severity
@@ -153,7 +169,10 @@ class PulseEngine:
             x     = np.array([delta_feats.get(f, 0.0) for f in DELTA_FEATURE_NAMES], dtype=np.float32)
             model = self._get_model()
             if model and model.is_loaded:
-                severity = float(model.predict_single(x))
+                raw_prob = float(model.predict_single(x))
+                # BLEND: 40% ML Customer Profile Risk + 60% Semantic Transaction Risk
+                # Ensures a Grocery txn (0.0 weight) visibly drops severity vs Lending App (0.85 weight)
+                severity = (raw_prob * 0.5) + (category.stress_weight * 0.5)
             else:
                 severity = float(category.stress_weight)  # fallback
 

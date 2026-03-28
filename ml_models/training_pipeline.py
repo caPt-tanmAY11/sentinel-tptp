@@ -67,7 +67,7 @@ def build_training_dataset(
         y:    (n_samples,)   int32 binary labels
         cids: list of customer_ids per sample (for audit)
     """
-    from ml_models.lstm_encoder import extract_embedding
+    from ml_models.lstm_encoder import extract_embeddings_batch
 
     close_conn = conn is None
     if conn is None:
@@ -141,7 +141,8 @@ def build_training_dataset(
             SELECT customer_id,
                    COALESCE(SUM(outstanding_principal), 0) AS debt,
                    COALESCE(SUM(emi_amount), 0)            AS emi,
-                   COUNT(*)                                AS loans
+                   COUNT(*)                                AS loans,
+                   ARRAY_AGG(emi_due_date)                 AS emi_dates
             FROM loans
             WHERE customer_id = ANY(%s::uuid[]) AND status = 'ACTIVE'
             GROUP BY customer_id
@@ -200,7 +201,17 @@ def build_training_dataset(
             # Sort all customer txns chronologically for LSTM history
             sorted_cust_txns = sorted(cust_txns, key=lambda t: t["txn_timestamp"])
 
+            # BATCH EXTRACT: Build histories for all real-time txns for this customer
+            rt_txn_histories = []
             for txn in rt_txns:
+                txn_ts = txn["txn_timestamp"]
+                history = [t for t in sorted_cust_txns if t["txn_timestamp"] < txn_ts]
+                rt_txn_histories.append(history)
+            
+            # One PyTorch forward pass for the entire customer!
+            lstm_embs_batch = extract_embeddings_batch(lstm_encoder, rt_txn_histories)
+
+            for txn_idx, txn in enumerate(rt_txns):
                 txn_ts = txn["txn_timestamp"]
                 try:
                     current_feats = compute_all_features_from_data(
@@ -214,14 +225,14 @@ def build_training_dataset(
                 except Exception:
                     continue
 
-                # LSTM embedding: last 20 transactions before this one
-                txn_history = [t for t in sorted_cust_txns if t["txn_timestamp"] < txn_ts]
-                lstm_emb = extract_embedding(lstm_encoder, txn_history)
+                # LSTM embedding retrieved from batch
+                lstm_emb = lstm_embs_batch[txn_idx]
 
                 cat = classify_transaction(txn)
                 delta = compute_delta_features(
                     current_feats, baseline, txn, cat,
                     lstm_embedding=lstm_emb,
+                    customer_emi_dates=cust_loans.get("emi_dates"),
                 )
                 x = np.array(
                     [delta.get(f, 0.0) for f in DELTA_FEATURE_NAMES],

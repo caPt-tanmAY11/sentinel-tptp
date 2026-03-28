@@ -400,3 +400,49 @@ def extract_embedding(
         LSTM_FEATURE_NAMES[i]: round(float(emb_np[i]), 6)
         for i in range(EMBEDDING_DIM)
     }
+
+
+def extract_embeddings_batch(
+    encoder: Optional[TransactionSequenceEncoder],
+    txn_histories: List[List[dict]],
+    device: str = "cpu",
+) -> List[Dict[str, float]]:
+    """
+    Extract 16d LSTM embeddings for a batch of samples.
+    Vastly faster than calling extract_embedding in a loop because it executes
+    a single PyTorch forward pass for the entire batch.
+
+    Args:
+        encoder:       Pre-trained encoder (or None)
+        txn_histories: List of shape (batch_size,), where each item is a
+                       chronologically sorted list of recent transactions.
+                       
+    Returns:
+        List of length batch_size containing embedding dicts.
+    """
+    n_samples = len(txn_histories)
+    if encoder is None or n_samples == 0:
+        empty = {name: 0.0 for name in LSTM_FEATURE_NAMES}
+        return [empty.copy() for _ in range(n_samples)]
+
+    # Build sequence arrays for all samples
+    seq_arrays = np.zeros((n_samples, SEQ_LEN, PER_TXN_DIM), dtype=np.float32)
+    for i, history in enumerate(txn_histories):
+        if len(history) > 0:
+            seq_arrays[i] = build_sequence_features(history)
+
+    # Single PyTorch forward pass
+    x = torch.from_numpy(seq_arrays).to(device)  # (batch_size, 20, 11)
+    with torch.no_grad():
+        emb = encoder(x)  # (batch_size, 16)
+    
+    emb_np = emb.cpu().numpy()
+    
+    # Convert back to dicts
+    results = []
+    for i in range(n_samples):
+        results.append({
+            LSTM_FEATURE_NAMES[j]: round(float(emb_np[i, j]), 6)
+            for j in range(EMBEDDING_DIM)
+        })
+    return results

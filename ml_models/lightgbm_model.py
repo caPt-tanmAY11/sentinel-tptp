@@ -37,9 +37,8 @@ LGBM_PARAMS: Dict[str, Any] = {
     "path_smooth":       0.5,
     "verbose":          -1,
     "n_jobs":           -1,
-    "deterministic":     True,
     "seed":              42,
-    "scale_pos_weight":  2.8,
+    "scale_pos_weight":  1.0,  # Use natural probabilities instead of inflating them
 }
 
 

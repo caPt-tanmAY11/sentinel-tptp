@@ -192,6 +192,7 @@ class RealTimeInjector:
         # Use os.urandom-seeded RNG — never deterministic across runs
         self.rng        = random.Random(int.from_bytes(os.urandom(8), "big"))
         self._producer  = None
+        self.cumulative_investments: Dict[str, float] = {}
 
     def _prod(self):
         if self._producer is None:
@@ -275,10 +276,16 @@ class RealTimeInjector:
 
                 txn = self.inject_transaction(cust, timestamp=ts)
                 count += 1
+                
+                cid = str(cust["customer_id"])
+                inv_total = self.cumulative_investments.get(cid, 0.0)
+                inv_str = f"  |  Total Invested: ₹{inv_total:>8.0f}" if inv_total > 0 else ""
+
                 print(
                     f"[{count:>4}/{total or '∞'}]  "
                     f"{txn.platform:<5}  {txn.payment_status:<8}  "
-                    f"₹{txn.amount:>8.0f}  {txn.receiver_name}"
+                    f"₹{txn.amount:>8.0f}  {txn.receiver_name:<30}"
+                    f"{inv_str}"
                 )
                 if total and count >= total:
                     break
@@ -373,6 +380,9 @@ class RealTimeInjector:
 
         bal_before = round(self.rng.uniform(monthly * 2, monthly * 8))
         bal_after  = max(0.0, bal_before - amount)
+
+        cid = str(customer["customer_id"])
+        self.cumulative_investments[cid] = self.cumulative_investments.get(cid, 0.0) + float(amount)
 
         return TransactionEvent(
             event_id=str(uuid.uuid4()),

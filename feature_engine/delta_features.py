@@ -69,6 +69,7 @@ def compute_delta_features(
     transaction: Dict[str, Any],
     category: TransactionCategory,
     lstm_embedding: Optional[Dict[str, float]] = None,
+    customer_emi_dates: Optional[List[int]] = None,
 ) -> Dict[str, float]:
     """
     Compute the full input vector for PulseScorer.
@@ -135,7 +136,12 @@ def compute_delta_features(
 
     # 4. Day of month risk (proximity to EMI due dates)
     dom = txn_ts.day if (txn_ts and hasattr(txn_ts, "day")) else 15
-    emi_dates = [1, 5, 7, 10, 15, 20, 25, 28]
+    if customer_emi_dates:
+        # Filter None/invalid in case of clean DB rows
+        valid_dates = [d for d in customer_emi_dates if d is not None and 1 <= d <= 31]
+        emi_dates = valid_dates if valid_dates else [1, 5, 7, 10, 15, 20, 25, 28]
+    else:
+        emi_dates = [1, 5, 7, 10, 15, 20, 25, 28]
     min_dist = min(abs(dom - d) for d in emi_dates)
     delta["day_of_month_risk"] = round(max(0.0, 1.0 - min_dist / 5.0), 4)
 
