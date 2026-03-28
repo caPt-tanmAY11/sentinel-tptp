@@ -76,6 +76,10 @@ class TransactionEvent(BaseModel):
     payment_status: str   = Field(default="success", description="success/failed/pending/reversed")
     reference_number: Optional[str] = None  # UTR (NEFT/RTGS) or RRN (UPI)
 
+    currency:         str            = Field(default="INR", description="ISO 4217 currency code, e.g. INR, USD, EUR")
+    receiver_country: str            = Field(default="IN",  description="ISO 3166-1 alpha-2 country of receiver, e.g. IN, US, GB")
+    receiver_vpa:     Optional[str]  = None  # UPI VPA of receiver — e.g. "merchant@ybl", NULL for ATM/NACH/RTGS
+
     # ── Balance Tracking ─────────────────────────────────────────
     # Represents the customer's PRIMARY savings account balance.
     # balance_change_pct is auto-computed if not provided.
@@ -126,6 +130,47 @@ class TransactionEvent(BaseModel):
         if v is not None:
             return v[:60]
         return v
+
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, v: str) -> str:
+    # Normalise to uppercase, enforce 3-char ISO 4217 format
+        upper = v.upper().strip()
+        if len(upper) != 3 or not upper.isalpha():
+            raise ValueError(
+                f"currency must be a 3-letter ISO 4217 code (e.g. 'INR', 'USD'), got '{v}'"
+            )
+        return upper
+
+    @field_validator("receiver_country")
+    @classmethod
+    def validate_receiver_country(cls, v: str) -> str:
+    # Normalise to uppercase, enforce 2-char ISO 3166-1 alpha-2 format
+        upper = v.upper().strip()
+        if len(upper) != 2 or not upper.isalpha():
+            raise ValueError(
+                f"receiver_country must be a 2-letter ISO 3166-1 code (e.g. 'IN', 'US'), got '{v}'"
+            )
+        return upper
+
+    
+    @field_validator("receiver_vpa")
+    @classmethod
+    def normalise_receiver_vpa(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip().lower()   # UPI VPAs are case-insensitive; store lowercase
+            if len(v) > 150:
+                v = v[:150]
+        return v
+    
+    def to_kafka_payload(self) -> bytes:
+        """
+        Serialize for publishing to Kafka.
+        Includes currency, receiver_country, receiver_vpa for fraud detection downstream.
+        """
+        import json
+        return json.dumps(self.to_dict()).encode("utf-8")
 
     @model_validator(mode="after")
     def compute_balance_change(self) -> "TransactionEvent":

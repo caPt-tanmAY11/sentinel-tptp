@@ -1,7 +1,8 @@
 'use client';
 
+import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
@@ -131,10 +132,23 @@ export default function CustomerDetailPage() {
     refetchInterval: 15_000,
   });
 
+  const { data: fraudData } = useQuery({
+    queryKey: ['fraud-alerts', customerId],
+    queryFn:  () => sentinelApi.getCustomerFraudAlerts(customerId).then(r => r.data),
+    refetchInterval: 15_000,
+  });
+
   const events: any[]  = histData?.events || [];
   const loans: any[]   = loansData?.loans || [];
   const cards: any[]   = cardsData?.credit_cards || [];
   const rawTxns: any[] = txnData?.transactions || [];
+  const fraudAlerts: any[] = fraudData?.fraud_alerts || [];
+  const openAlerts = fraudAlerts.filter((a: any) => a.status === 'OPEN' || a.status === 'REVIEWED');
+
+  const [selectedAlert, setSelectedAlert] = useState<any>(null);
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  const [isActioning, setIsActioning] = useState(false);
+  const queryClient = useQueryClient();
 
   const chartData = [...events].reverse().map((e, i) => ({
     idx:   i + 1,
@@ -177,6 +191,15 @@ export default function CustomerDetailPage() {
             </h1>
             <p className="text-xs text-slate-400 font-mono">{customerId}</p>
           </div>
+          {openAlerts.length > 0 && (
+            <button
+               onClick={() => { setSelectedAlert(openAlerts[0]); setIsReviewModalOpen(true); }}
+               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-bold bg-red-100 text-red-700 hover:bg-red-200 transition"
+            >
+              <span className="material-symbols-outlined text-[16px]">warning</span>
+              Fraud Alert Detected ({openAlerts.length})
+            </button>
+          )}
           <TierBadge label={riskLabel} />
         </div>
       </header>
@@ -604,6 +627,114 @@ export default function CustomerDetailPage() {
         </div>
 
       </div>
+
+      {/* ── Review Modal ── */}
+      {isReviewModalOpen && selectedAlert && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" style={{ margin: 0 }}>
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-red-50">
+              <div className="flex items-center gap-3">
+                <span className="material-symbols-outlined text-red-600">gavel</span>
+                <h2 className="font-headline font-bold text-lg text-red-900">Review Fraud Alert</h2>
+              </div>
+              <button onClick={() => !isActioning && setIsReviewModalOpen(false)} className="text-slate-400 hover:text-slate-700">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <div className="p-6 space-y-4 flex-1 overflow-y-auto">
+              <div className="bg-slate-50 p-4 rounded-xl space-y-2">
+                <InfoRow label="Alert ID" value={selectedAlert.alert_id} mono />
+                <InfoRow label="Transaction Amount" value={fmtInr(selectedAlert.txn_amount)} />
+                <InfoRow label="Platform" value={selectedAlert.platform} />
+                <InfoRow label="Receiver Country" value={selectedAlert.receiver_country || 'IN'} />
+                <InfoRow label="Currency" value={selectedAlert.currency || 'INR'} />
+                <InfoRow label="Fraud Score" value={selectedAlert.fraud_score?.toFixed(3)} />
+                <div className="pt-3 border-t border-slate-200 mt-2">
+                  <span className="text-xs text-slate-500 font-medium block mb-2">Triggered Signals:</span>
+                  <div className="flex gap-2 flex-wrap">
+                    {selectedAlert.signal_international && <span className="text-[10px] px-2 py-1 bg-red-100 text-red-700 rounded font-bold border border-red-200">International Txn</span>}
+                    {selectedAlert.signal_amount_spike && <span className="text-[10px] px-2 py-1 bg-red-100 text-red-700 rounded font-bold border border-red-200">Amount Spike</span>}
+                    {selectedAlert.signal_freq_spike && <span className="text-[10px] px-2 py-1 bg-red-100 text-red-700 rounded font-bold border border-red-200">Frequency Spike</span>}
+                  </div>
+                </div>
+                <div className="pt-3 mt-2">
+                   <p className="text-sm text-slate-700 font-medium">
+                     <strong className="text-slate-900">Reason:</strong> {selectedAlert.fraud_reason}
+                   </p>
+                </div>
+              </div>
+              {selectedAlert.payment_holiday_suggested && loans.length > 0 && loans[0].emi_due_date && (
+                <div className="bg-amber-50 p-4 rounded-xl text-amber-900 text-sm border border-amber-200">
+                  <span className="material-symbols-outlined text-amber-600 text-[18px] align-middle mr-1.5">event</span>
+                  <strong>Payment Holiday Recommended:</strong> Customer has an EMI of {fmtInr(loans[0].emi_amount)} due on Day {loans[0].emi_due_date}. This alert will suggest a payment holiday in the notification email.
+                </div>
+              )}
+            </div>
+            <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+              <button 
+                onClick={() => setIsReviewModalOpen(false)} 
+                disabled={isActioning}
+                className="px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-200 rounded-xl transition disabled:opacity-50">
+                Cancel
+              </button>
+              <button 
+                onClick={async () => {
+                  setIsActioning(true);
+                  try {
+                    await sentinelApi.reviewFraudAlert(selectedAlert.alert_id, 'DISMISSED', 'Dashboard User', 'False alarm');
+                    setIsReviewModalOpen(false);
+                    queryClient.invalidateQueries({ queryKey: ['fraud-alerts', customerId] });
+                  } catch(e) { console.error(e); }
+                  setIsActioning(false);
+                }}
+                disabled={isActioning}
+                className="px-4 py-2 text-sm font-bold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl transition disabled:opacity-50">
+                Dismiss Alert
+              </button>
+              <button 
+                onClick={async () => {
+                  setIsActioning(true);
+                  try {
+                    // 1. Send email
+                    await sentinelApi.sendFraudAlertEmail({
+                      alert_id: selectedAlert.alert_id,
+                      customer_id: selectedAlert.customer_id,
+                      first_name: profile?.first_name || 'Customer',
+                      last_name: profile?.last_name || '',
+                      txn_amount: selectedAlert.txn_amount,
+                      platform: selectedAlert.platform,
+                      receiver_vpa: selectedAlert.receiver_vpa,
+                      receiver_country: selectedAlert.receiver_country,
+                      currency: selectedAlert.currency,
+                      fraud_score: selectedAlert.fraud_score,
+                      fraud_reason: selectedAlert.fraud_reason,
+                      signal_international: selectedAlert.signal_international,
+                      signal_amount_spike: selectedAlert.signal_amount_spike,
+                      signal_freq_spike: selectedAlert.signal_freq_spike,
+                      payment_holiday_suggested: selectedAlert.payment_holiday_suggested,
+                      next_emi_due_date: loans?.[0]?.emi_due_date ? `Day ${loans[0].emi_due_date}` : null,
+                      emi_amount: loans?.[0]?.emi_amount,
+                    });
+                    // 2. Mark confirmed in DB (which updates status to CONFIRMED)
+                    await sentinelApi.reviewFraudAlert(selectedAlert.alert_id, 'CONFIRMED', 'Dashboard User');
+                    setIsReviewModalOpen(false);
+                    queryClient.invalidateQueries({ queryKey: ['fraud-alerts', customerId] });
+                  } catch(e) { console.error(e); }
+                  setIsActioning(false);
+                }}
+                disabled={isActioning}
+                className="px-4 py-2 text-sm font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition flex items-center gap-2 disabled:opacity-70">
+                {isActioning ? (
+                  <><span className="animate-spin material-symbols-outlined text-[16px]">refresh</span> Processing...</>
+                ) : (
+                  <><span className="material-symbols-outlined text-[16px]">mail</span> Confirm & Notify Customer</>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

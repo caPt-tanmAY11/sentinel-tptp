@@ -112,6 +112,17 @@ class TransactionScoreResponse(BaseModel):
     top_features:          List[Dict[str, Any]]
     model_version:         str
     scoring_latency_ms:    int
+    # ── PFD fields — only populated when fraud_quarantined=True ──
+    fraud_quarantined:          Optional[bool]  = None
+    fraud_score:                Optional[float] = None
+    fraud_reason:               Optional[str]   = None
+    signal_international:       Optional[bool]  = None
+    signal_amount_spike:        Optional[bool]  = None
+    signal_freq_spike:          Optional[bool]  = None
+    payment_holiday_suggested:  Optional[bool]  = None
+    next_emi_due_date:          Optional[str]   = None
+    emi_amount:                 Optional[float] = None
+    alert_id: Optional[str] = None
 
 
 class CustomerPulseResponse(BaseModel):
@@ -152,16 +163,24 @@ async def ingest_transaction(event: TransactionEvent):
     """
     Accept a raw transaction event, score it immediately, return result.
     Same code path as the Kafka consumer — used for direct API injection.
+
+    If the transaction triggers the Probable Fault Detection (PFD) engine,
+    the response will contain fraud_quarantined=True and the pulse score
+    will be unchanged. The Next.js layer checks this flag and dispatches
+    the fraud alert email automatically.
     """
     if _engine is None:
         raise HTTPException(status_code=503, detail="Engine not initialised")
     try:
         result = _engine.process(event)
+
+        # Baseline / feature errors — not a fraud case, just incomplete data
         if "skip_reason" in result:
             raise HTTPException(
                 status_code=422,
                 detail=f"Transaction not scored: {result['skip_reason']}"
             )
+
         return TransactionScoreResponse(**result)
     except HTTPException:
         raise
@@ -1230,5 +1249,291 @@ async def get_full_audit_trail(
                 for r in rows
             ],
         }
+    finally:
+        conn.close()
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PROBABLE FAULT DETECTION (PFD) — Fraud Alert Endpoints
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Pydantic models ───────────────────────────────────────────────────────
+
+class FraudAlertSummary(BaseModel):
+    alert_id:                   str
+    customer_id:                str
+    first_name:                 Optional[str] = None
+    last_name:                  Optional[str] = None
+    email:                      Optional[str] = None
+    transaction_id:             str
+    txn_timestamp:              str
+    txn_amount:                 float
+    platform:                   str
+    receiver_vpa:               Optional[str] = None
+    receiver_name:              Optional[str] = None
+    receiver_country:           str
+    currency:                   str
+    signal_international:       bool
+    signal_amount_spike:        bool
+    signal_freq_spike:          bool
+    fraud_score:                float
+    fraud_reason:               str
+    amount_zscore:              Optional[float] = None
+    baseline_amount_avg:        Optional[float] = None
+    baseline_amount_std:        Optional[float] = None
+    hourly_txn_count:           Optional[int]   = None
+    baseline_hourly_avg:        Optional[float] = None
+    status:                     str
+    alert_email_sent:           bool
+    alert_email_sent_at:        Optional[str]   = None
+    reviewed_by:                Optional[str]   = None
+    reviewed_at:                Optional[str]   = None
+    review_notes:               Optional[str]   = None
+    next_emi_due_date:          Optional[str]   = None
+    emi_amount:                 Optional[float] = None
+    payment_holiday_suggested:  bool
+    created_at:                 str
+
+
+class FraudReviewRequest(BaseModel):
+    status:       str    # REVIEWED | DISMISSED | CONFIRMED
+    reviewed_by:  str
+    review_notes: Optional[str] = None
+
+
+# ── Helper — shared row → dict serialiser ────────────────────────────────
+
+def _serialise_alert(row: dict) -> dict:
+    """Convert a fraud_alerts DB row to a JSON-safe dict."""
+    def _dt(v):
+        return v.isoformat() if v and hasattr(v, "isoformat") else (str(v) if v else None)
+
+    return {
+        "alert_id":                 str(row["alert_id"]),
+        "customer_id":              str(row["customer_id"]),
+        "first_name":               row.get("first_name"),
+        "last_name":                row.get("last_name"),
+        "email":                    row.get("email"),
+        "transaction_id":           str(row["transaction_id"]),
+        "txn_timestamp":            _dt(row["txn_timestamp"]),
+        "txn_amount":               float(row["txn_amount"]),
+        "platform":                 row["platform"],
+        "receiver_vpa":             row.get("receiver_vpa"),
+        "receiver_name":            row.get("receiver_name"),
+        "receiver_country":         row["receiver_country"],
+        "currency":                 row["currency"],
+        "signal_international":     bool(row["signal_international"]),
+        "signal_amount_spike":      bool(row["signal_amount_spike"]),
+        "signal_freq_spike":        bool(row["signal_freq_spike"]),
+        "fraud_score":              float(row["fraud_score"]),
+        "fraud_reason":             row["fraud_reason"],
+        "amount_zscore":            float(row["amount_zscore"]) if row.get("amount_zscore") else None,
+        "baseline_amount_avg":      float(row["baseline_amount_avg"]) if row.get("baseline_amount_avg") else None,
+        "baseline_amount_std":      float(row["baseline_amount_std"]) if row.get("baseline_amount_std") else None,
+        "hourly_txn_count":         int(row["hourly_txn_count"]) if row.get("hourly_txn_count") else None,
+        "baseline_hourly_avg":      float(row["baseline_hourly_avg"]) if row.get("baseline_hourly_avg") else None,
+        "status":                   row["status"],
+        "alert_email_sent":         bool(row["alert_email_sent"]),
+        "alert_email_sent_at":      _dt(row.get("alert_email_sent_at")),
+        "reviewed_by":              row.get("reviewed_by"),
+        "reviewed_at":              _dt(row.get("reviewed_at")),
+        "review_notes":             row.get("review_notes"),
+        "next_emi_due_date":        _dt(row.get("next_emi_due_date")),
+        "emi_amount":               float(row["emi_amount"]) if row.get("emi_amount") else None,
+        "payment_holiday_suggested": bool(row["payment_holiday_suggested"]),
+        "created_at":               _dt(row["created_at"]),
+    }
+
+
+# ── Endpoint 1: All fraud alerts for one customer ─────────────────────────
+
+@app.get("/customer/{customer_id}/fraud_alerts")
+async def get_customer_fraud_alerts(
+    customer_id: str,
+    status:  Optional[str] = Query(None, description="Filter by status: OPEN|REVIEWED|DISMISSED|CONFIRMED"),
+    limit:   int           = Query(50, ge=1, le=200),
+):
+    """
+    Return all fraud alerts for a specific customer, newest first.
+    Optionally filter by lifecycle status.
+    """
+    conn = _get_db()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if status:
+                cur.execute("""
+                    SELECT fa.*,
+                           c.first_name, c.last_name, c.email
+                    FROM   fraud_alerts fa
+                    JOIN   customers    c  USING (customer_id)
+                    WHERE  fa.customer_id = %s
+                      AND  fa.status      = %s
+                    ORDER  BY fa.created_at DESC
+                    LIMIT  %s
+                """, (customer_id, status.upper(), limit))
+            else:
+                cur.execute("""
+                    SELECT fa.*,
+                           c.first_name, c.last_name, c.email
+                    FROM   fraud_alerts fa
+                    JOIN   customers    c  USING (customer_id)
+                    WHERE  fa.customer_id = %s
+                    ORDER  BY fa.created_at DESC
+                    LIMIT  %s
+                """, (customer_id, limit))
+
+            rows = cur.fetchall()
+            return {
+                "customer_id":  customer_id,
+                "total":        len(rows),
+                "fraud_alerts": [_serialise_alert(dict(r)) for r in rows],
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+# ── Endpoint 2: Portfolio-wide open fraud alerts (for dashboard) ──────────
+
+@app.get("/fraud_alerts")
+async def get_all_fraud_alerts(
+    status: Optional[str] = Query("OPEN", description="OPEN|REVIEWED|DISMISSED|CONFIRMED|ALL"),
+    limit:  int           = Query(100, ge=1, le=500),
+):
+    """
+    Return fraud alerts across all customers — used by the dashboard
+    fraud monitoring panel. Defaults to OPEN alerts only.
+    Pass status=ALL to return every alert regardless of lifecycle stage.
+    """
+    conn = _get_db()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if status and status.upper() != "ALL":
+                cur.execute("""
+                    SELECT fa.*,
+                           c.first_name, c.last_name, c.email
+                    FROM   fraud_alerts fa
+                    JOIN   customers    c  USING (customer_id)
+                    WHERE  fa.status = %s
+                    ORDER  BY fa.created_at DESC
+                    LIMIT  %s
+                """, (status.upper(), limit))
+            else:
+                cur.execute("""
+                    SELECT fa.*,
+                           c.first_name, c.last_name, c.email
+                    FROM   fraud_alerts fa
+                    JOIN   customers    c  USING (customer_id)
+                    ORDER  BY fa.created_at DESC
+                    LIMIT  %s
+                """, (limit,))
+
+            rows = cur.fetchall()
+            alerts = [_serialise_alert(dict(r)) for r in rows]
+
+            # Quick summary counts for the dashboard header
+            open_count      = sum(1 for a in alerts if a["status"] == "OPEN")
+            confirmed_count = sum(1 for a in alerts if a["status"] == "CONFIRMED")
+            holiday_count   = sum(1 for a in alerts if a["payment_holiday_suggested"])
+
+            return {
+                "total":                  len(alerts),
+                "open_count":             open_count,
+                "confirmed_count":        confirmed_count,
+                "payment_holiday_count":  holiday_count,
+                "fraud_alerts":           alerts,
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+# ── Endpoint 3: Officer reviews an alert ─────────────────────────────────
+
+@app.patch("/fraud_alerts/{alert_id}/review")
+async def review_fraud_alert(alert_id: str, payload: FraudReviewRequest):
+    """
+    Bank officer marks an alert as REVIEWED, DISMISSED, or CONFIRMED.
+    Sets reviewed_by, reviewed_at, and optional review_notes.
+    """
+    valid_statuses = {"REVIEWED", "DISMISSED", "CONFIRMED"}
+    if payload.status.upper() not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status must be one of {valid_statuses}"
+        )
+
+    conn = _get_db()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE fraud_alerts
+                SET    status       = %s,
+                       reviewed_by  = %s,
+                       reviewed_at  = NOW(),
+                       review_notes = %s
+                WHERE  alert_id = %s
+                RETURNING alert_id, status, reviewed_by, reviewed_at
+            """, (
+                payload.status.upper(),
+                payload.reviewed_by,
+                payload.review_notes,
+                alert_id,
+            ))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Alert not found")
+            conn.commit()
+            return {
+                "alert_id":    str(row["alert_id"]),
+                "status":      row["status"],
+                "reviewed_by": row["reviewed_by"],
+                "reviewed_at": row["reviewed_at"].isoformat(),
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+# ── Endpoint 4: Next.js marks email as sent ───────────────────────────────
+
+@app.post("/fraud_alerts/{alert_id}/email_sent")
+async def mark_fraud_alert_email_sent(alert_id: str):
+    """
+    Called by the Next.js fraud alert email route immediately after
+    nodemailer successfully dispatches the alert email.
+    Stamps alert_email_sent=True and alert_email_sent_at=NOW().
+    Kept separate from the alert creation so email failures never
+    roll back the fraud_alert row itself.
+    """
+    conn = _get_db()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE fraud_alerts
+                SET    alert_email_sent    = TRUE,
+                       alert_email_sent_at = NOW()
+                WHERE  alert_id = %s
+                RETURNING alert_id, alert_email_sent, alert_email_sent_at
+            """, (alert_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Alert not found")
+            conn.commit()
+            return {
+                "alert_id":            str(row["alert_id"]),
+                "alert_email_sent":    row["alert_email_sent"],
+                "alert_email_sent_at": row["alert_email_sent_at"].isoformat(),
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()

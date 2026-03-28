@@ -27,6 +27,8 @@ from realtime.pulse_accumulator import (
     apply_cibil_modifier,
 )
 
+from fraud_detection.fraud_detector import FraudDetector
+
 settings = get_settings()
 
 
@@ -45,11 +47,12 @@ class PulseEngine:
     """
 
     def __init__(self, redis_client=None):
-        self.redis_client  = redis_client
-        self._model        = None
-        self._model_loaded = False
-        self._lstm_encoder = None
-        self._lstm_loaded  = False
+        self.redis_client    = redis_client
+        self._model          = None
+        self._model_loaded   = False
+        self._fraud_detector = FraudDetector()
+        self._lstm_encoder   = None
+        self._lstm_loaded    = False
 
     def _get_lstm_encoder(self):
         if not self._lstm_loaded:
@@ -96,6 +99,21 @@ class PulseEngine:
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             cid    = event.customer_id
+
+            # ── Fraud Gate — runs before any pulse logic ──────────────────
+            # If a fraud signal fires, we quarantine this transaction:
+            #   • still write it to raw transactions (for audit)
+            #   • persist a fraud_alert row  ← returns the new alert_id
+            #   • skip all pulse score changes
+            #   • return a fraud_quarantined result to the caller
+            fraud_result = self._fraud_detector.check(event, conn)
+            if fraud_result.is_fraud:
+                self._write_raw_transaction(event, cursor)
+                alert_id = self._persist_fraud_alert(event, fraud_result, cursor)  # ← capture id
+                conn.commit()
+                cursor.close()
+                return self._fraud_quarantined_result(event, fraud_result, t_start, alert_id)  # ← pass id
+            # ── End fraud gate ────────────────────────────────────────────
 
             # Step 1: Fetch baseline
             baseline = get_baseline(cid, redis_client=self.redis_client, conn=conn)
@@ -225,26 +243,7 @@ class PulseEngine:
             # ── Also write to raw transactions table so customer profile
             #    Transaction History section shows real-time events ──────
             try:
-                cursor.execute("""\
-                    INSERT INTO transactions (
-                        transaction_id, customer_id, account_number,
-                        sender_id, sender_name,
-                        receiver_id, receiver_name,
-                        amount, platform, payment_status,
-                        reference_number,
-                        balance_before, balance_after,
-                        txn_timestamp
-                    ) VALUES (%s,%s,%s, %s,%s, %s,%s, %s,%s,%s, %s, %s,%s, %s)
-                    ON CONFLICT DO NOTHING
-                """, (
-                    event.event_id, cid, event.account_number,
-                    event.sender_id,   event.sender_name,
-                    event.receiver_id, event.receiver_name,
-                    event.amount, event.platform, event.payment_status,
-                    None,  # reference_number — not in TransactionEvent, nullable
-                    event.balance_before, event.balance_after,
-                    event.txn_timestamp,
-                ))
+                self._write_raw_transaction(event, cursor)
             except Exception as txn_err:
                 # Non-blocking — pulse scoring continues even if raw insert fails
                 print(f"  ⚠ Raw transaction insert failed (non-fatal): {txn_err}")
@@ -343,4 +342,137 @@ class PulseEngine:
             "model_version": "fallback",
             "scoring_latency_ms": int((time.time() - t_start) * 1000),
             "skip_reason": reason,
+        }
+
+    def _write_raw_transaction(self, event: TransactionEvent, cursor) -> None:
+        """
+        Writes the raw transaction to the transactions table.
+        Called for both normal and fraud-quarantined transactions so every
+        event always has an audit trail regardless of fraud outcome.
+        Includes the three PFD columns: currency, receiver_country, receiver_vpa.
+        """
+        cursor.execute("""\
+            INSERT INTO transactions (
+                transaction_id, customer_id, account_number,
+                sender_id, sender_name,
+                receiver_id, receiver_name,
+                amount, platform, payment_status,
+                reference_number,
+                balance_before, balance_after,
+                txn_timestamp,
+                currency, receiver_country, receiver_vpa
+            ) VALUES (
+                %s,%s,%s, %s,%s, %s,%s, %s,%s,%s,
+                %s, %s,%s, %s, %s,%s,%s
+            )
+            ON CONFLICT DO NOTHING
+        """, (
+            event.event_id, event.customer_id, event.account_number,
+            event.sender_id,   event.sender_name,
+            event.receiver_id, event.receiver_name,
+            event.amount, event.platform, event.payment_status,
+            None,                    # reference_number — nullable
+            event.balance_before, event.balance_after,
+            event.txn_timestamp,
+            event.currency,          # new
+            event.receiver_country,  # new
+            event.receiver_vpa,      # new
+        ))
+
+    def _persist_fraud_alert(
+        self,
+        event:        TransactionEvent,
+        fraud_result, # FraudCheckResult
+        cursor,
+    ) -> str:
+        """
+        Writes a row to fraud_alerts for this quarantined transaction.
+        Returns the alert_id so the caller can include it in the API response
+        and the Next.js layer can use it to stamp alert_email_sent after dispatch.
+
+        alert_email_sent stays False here — the Next.js email route stamps it
+        after nodemailer succeeds, so email failures never roll back this row.
+        """
+        alert_id = str(uuid.uuid4())  # ← generate here so we can return it
+        cursor.execute("""\
+            INSERT INTO fraud_alerts (
+                alert_id, customer_id,
+                transaction_id, txn_timestamp, txn_amount, platform,
+                receiver_vpa, receiver_name, receiver_country, currency,
+                signal_international, signal_amount_spike, signal_freq_spike,
+                fraud_score, fraud_reason,
+                amount_zscore, baseline_amount_avg, baseline_amount_std,
+                hourly_txn_count, baseline_hourly_avg,
+                next_emi_due_date, emi_amount, payment_holiday_suggested,
+                status, alert_email_sent
+            ) VALUES (
+                %s,%s, %s,%s,%s,%s, %s,%s,%s,%s,
+                %s,%s,%s, %s,%s, %s,%s,%s, %s,%s,
+                %s,%s,%s, %s,%s
+            )
+        """, (
+            alert_id, event.customer_id,
+            event.event_id, event.txn_timestamp, event.amount, event.platform,
+            event.receiver_vpa, event.receiver_name, event.receiver_country, event.currency,
+            fraud_result.signal_international,
+            fraud_result.signal_amount_spike,
+            fraud_result.signal_freq_spike,
+            fraud_result.fraud_score,
+            fraud_result.fraud_reason,
+            fraud_result.amount_zscore,
+            fraud_result.baseline_amount_avg,
+            fraud_result.baseline_amount_std,
+            fraud_result.hourly_txn_count,
+            fraud_result.baseline_hourly_avg,
+            fraud_result.next_emi_due_date,
+            fraud_result.emi_amount,
+            fraud_result.payment_holiday_suggested,
+            "OPEN", False,
+        ))
+        return alert_id  # ← return so fraud gate can thread it through
+
+    def _fraud_quarantined_result(
+        self,
+        event:        TransactionEvent,
+        fraud_result, # FraudCheckResult
+        t_start:      float,
+        alert_id:     str,   # ← new parameter
+    ) -> Dict[str, Any]:
+        """
+        Return dict for a fraud-quarantined transaction.
+        Pulse scores are intentionally unchanged — before == after == 0.0.
+        The 'fraud_quarantined' key signals to app.py that an alert email
+        must be dispatched. The 'alert_id' is passed to Next.js so it can
+        stamp alert_email_sent=True after nodemailer succeeds.
+        """
+        return {
+            "event_id":               event.event_id,
+            "customer_id":            event.customer_id,
+            "scored_at":              datetime.now(timezone.utc).isoformat(),
+            "amount":                 event.amount,
+            "platform":               event.platform,
+            "inferred_category":      "FRAUD_QUARANTINED",
+            "classifier_confidence":  0.0,
+            "txn_severity":           0.0,
+            "severity_direction":     "neutral",
+            "delta_applied":          0.0,
+            "pulse_score_before":     0.0,
+            "pulse_score_after":      0.0,
+            "risk_tier":              0,
+            "risk_label":             "QUARANTINED",
+            "top_features":           [],
+            "model_version":          "fraud_gate",
+            "scoring_latency_ms":     int((time.time() - t_start) * 1000),
+            # ── PFD fields — consumed by app.py / Next.js ─────────────────
+            "fraud_quarantined":      True,
+            "alert_id":               alert_id,   # ← now present
+            "fraud_score":            fraud_result.fraud_score,
+            "fraud_reason":           fraud_result.fraud_reason,
+            "signal_international":   fraud_result.signal_international,
+            "signal_amount_spike":    fraud_result.signal_amount_spike,
+            "signal_freq_spike":      fraud_result.signal_freq_spike,
+            "payment_holiday_suggested": fraud_result.payment_holiday_suggested,
+            "next_emi_due_date":      fraud_result.next_emi_due_date.isoformat()
+                                      if fraud_result.next_emi_due_date else None,
+            "emi_amount":             fraud_result.emi_amount,
         }

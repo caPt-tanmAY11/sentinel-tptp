@@ -117,4 +117,55 @@ export const sentinelApi = {
 
   getFullAuditTrail: (customerId?: string, limit = 500) =>
     api.get('/audit/full-trail', { params: { customer_id: customerId, limit } }),
+
+  // ── Probable Fault Detection (PFD) ──────────────────────────────────────
+
+  // All fraud alerts across the portfolio (dashboard panel)
+  getFraudAlerts: (status = 'OPEN', limit = 100) =>
+    api.get('/fraud_alerts', { params: { status, limit } }),
+
+  // Fraud alerts for one specific customer
+  getCustomerFraudAlerts: (customerId: string, status?: string) =>
+    api.get(`/customer/${customerId}/fraud_alerts`, {
+      params: status ? { status } : {},
+    }),
+
+  // Officer reviews an alert (REVIEWED | DISMISSED | CONFIRMED)
+  reviewFraudAlert: (
+    alertId:     string,
+    status:      string,
+    reviewedBy:  string,
+    reviewNotes?: string,
+  ) =>
+    api.patch(`/fraud_alerts/${alertId}/review`, {
+      status,
+      reviewed_by:  reviewedBy,
+      review_notes: reviewNotes,
+    }),
+
+  // Next.js stamps email sent after nodemailer success
+  markFraudAlertEmailSent: (alertId: string) =>
+    api.post(`/fraud_alerts/${alertId}/email_sent`),
+
+  // Send fraud alert email (calls the Next.js nodemailer route above)
+  sendFraudAlertEmail: (payload: {
+    alert_id:                string;
+    customer_id:             string;
+    first_name:              string;
+    last_name:               string;
+    txn_amount:              number;
+    platform:                string;
+    receiver_vpa?:           string | null;
+    receiver_country:        string;
+    currency:                string;
+    fraud_score:             number;
+    fraud_reason:            string;
+    signal_international:    boolean;
+    signal_amount_spike:     boolean;
+    signal_freq_spike:       boolean;
+    payment_holiday_suggested: boolean;
+    next_emi_due_date?:      string | null;
+    emi_amount?:             number | null;
+  }) =>
+    nextApi.post('/api/fraud/alert', payload),
 };
