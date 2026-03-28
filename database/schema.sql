@@ -715,5 +715,52 @@ FROM (
     ] AS emails
 ) t;
 
+-- =====================================================================
+-- 10. GRIEVANCES
+-- Customer grievances raised after receiving a risk alert
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS grievances (
+    grievance_id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    intervention_id     UUID NOT NULL REFERENCES interventions(intervention_id),
+    customer_id             UUID NOT NULL REFERENCES customers(customer_id) ON DELETE CASCADE,
+    customer_name           VARCHAR(255) NOT NULL,
+    message             TEXT NOT NULL,
+    status              VARCHAR(20) DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'REVIEWED', 'RESOLVED', 'CLOSED')),
+    submitted_at        TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    reviewed_at         TIMESTAMP WITH TIME ZONE,
+    resolved_at         TIMESTAMP WITH TIME ZONE,
+    officer_notes       TEXT,
+    transaction_disputes JSONB,
+    additional_notes     TEXT
+);
+
+CREATE INDEX idx_grievances_customer       ON grievances(customer_id);
+CREATE INDEX idx_grievances_intervention   ON grievances(intervention_id);
+CREATE INDEX idx_grievances_status         ON grievances(status);
+CREATE INDEX idx_grievances_submitted_at   ON grievances(submitted_at DESC);
+
+
+CREATE TABLE IF NOT EXISTS intervention_emails (
+    email_id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    customer_id             UUID NOT NULL REFERENCES customers(customer_id) ON DELETE CASCADE,
+    risk_tier               INTEGER NOT NULL,
+    risk_label              VARCHAR(20) NOT NULL CHECK (risk_label IN ('HIGH', 'CRITICAL')),
+    pulse_score             DECIMAL(6,5) NOT NULL,
+    sent_to                 VARCHAR(255) NOT NULL,
+    sent_by_officer         VARCHAR(100),
+    sent_at                 TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    is_acknowledged         BOOLEAN DEFAULT FALSE,
+    acknowledged_at         TIMESTAMP WITH TIME ZONE,
+    ack_token               UUID DEFAULT uuid_generate_v4(),
+    status                  VARCHAR(20) DEFAULT 'SENT' CHECK (status IN (
+                                'SENT', 'ACKNOWLEDGED', 'FAILED')),
+    created_at              TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_intervention_emails_customer ON intervention_emails(customer_id);
+CREATE INDEX IF NOT EXISTS idx_intervention_emails_sent_at  ON intervention_emails(sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_intervention_emails_ack      ON intervention_emails(ack_token);
+CREATE INDEX IF NOT EXISTS idx_intervention_emails_status   ON intervention_emails(status);
+
 COMMIT;
 

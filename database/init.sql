@@ -359,7 +359,9 @@ CREATE TABLE IF NOT EXISTS grievances (
     submitted_at        TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     reviewed_at         TIMESTAMP WITH TIME ZONE,
     resolved_at         TIMESTAMP WITH TIME ZONE,
-    officer_notes       TEXT
+    officer_notes       TEXT,
+    transaction_disputes JSONB,
+    additional_notes     TEXT
 );
 
 CREATE INDEX idx_grievances_customer       ON grievances(customer_id);

@@ -1052,36 +1052,124 @@ async def get_intervention_details(intervention_id: str):
     finally:
         conn.close()
 
+@app.get("/interventions/{intervention_id}/trigger-transactions")
+async def get_trigger_transactions(intervention_id: str):
+    """
+    Returns the top stress-signal transactions that contributed to this
+    customer's HIGH/CRITICAL tier, in the 14 days before the intervention
+    was sent. Used to populate the customer grievance form.
+    """
+    conn = _get_db()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 1. Get customer_id and sent_at from the intervention
+        cursor.execute("""
+            SELECT customer_id, sent_at, risk_tier
+            FROM interventions
+            WHERE intervention_id = %s
+        """, (intervention_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Intervention not found")
+
+        customer_id = row["customer_id"]
+        sent_at     = row["sent_at"]
+        risk_tier   = row["risk_tier"]
+
+        # 2. Fetch top negative-severity transactions in the 14 days before send
+        cursor.execute("""
+            SELECT
+                event_id,
+                transaction_id,
+                event_ts,
+                amount,
+                platform,
+                receiver_id,
+                inferred_category,
+                txn_severity,
+                severity_direction,
+                pulse_score_before,
+                pulse_score_after,
+                top_features
+            FROM transaction_pulse_events
+            WHERE customer_id = %s
+              AND severity_direction = 'positive'
+              AND event_ts <= %s
+              AND event_ts >= %s - INTERVAL '14 days'
+            ORDER BY txn_severity DESC
+            LIMIT 10
+        """, (customer_id, sent_at or None, sent_at or None))
+
+        transactions = cursor.fetchall()
+
+        return {
+            "intervention_id": intervention_id,
+            "risk_tier": risk_tier,
+            "transactions": [
+                {
+                    "event_id":           str(r["event_id"]),
+                    "transaction_id":     str(r["transaction_id"]),
+                    "event_ts":           r["event_ts"].isoformat() if r["event_ts"] else None,
+                    "amount":             float(r["amount"]),
+                    "platform":           r["platform"],
+                    "receiver_id":        r["receiver_id"],
+                    "inferred_category":  r["inferred_category"],
+                    "txn_severity":       float(r["txn_severity"]),
+                    "severity_direction": r["severity_direction"],
+                    "pulse_score_before": float(r["pulse_score_before"]),
+                    "pulse_score_after":  float(r["pulse_score_after"]),
+                    "top_features":       r["top_features"] or [],
+                }
+                for r in transactions
+            ],
+        }
+    finally:
+        conn.close()
 
 @app.post("/grievances")
 async def create_grievance(payload: dict):
     """
     Save a customer grievance to the DB.
-    Payload: { intervention_id, customer_id, customer_name, message }
+    Payload: {
+        intervention_id, customer_id, customer_name,
+        message,                         # kept for backward compat (general notes)
+        transaction_disputes,            # list of per-txn dispute objects (new)
+        additional_notes                 # free-text extra queries box (new)
+    }
     """
-    intervention_id = payload.get("intervention_id")
-    customer_id     = payload.get("customer_id")
-    customer_name   = payload.get("customer_name")
-    message         = payload.get("message")
+    import json
 
-    if not all([intervention_id, customer_id, customer_name, message]):
+    intervention_id      = payload.get("intervention_id")
+    customer_id          = payload.get("customer_id")
+    customer_name        = payload.get("customer_name")
+    message              = payload.get("message", "")
+    transaction_disputes = payload.get("transaction_disputes")   # list or None
+    additional_notes     = payload.get("additional_notes", "")
+
+    if not all([intervention_id, customer_id, customer_name]):
         raise HTTPException(status_code=400, detail="Missing required fields")
+
+    # Serialise disputes to JSON string for storage
+    disputes_json = json.dumps(transaction_disputes) if transaction_disputes else None
 
     conn = _get_db()
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO grievances 
-                (intervention_id, customer_id, customer_name, message)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO grievances
+                (intervention_id, customer_id, customer_name,
+                 message, transaction_disputes, additional_notes)
+            VALUES (%s, %s, %s, %s, %s::jsonb, %s)
             RETURNING grievance_id, submitted_at
-        """, (intervention_id, customer_id, customer_name, message))
+        """, (intervention_id, customer_id, customer_name,
+              message, disputes_json, additional_notes or None))
         row = cursor.fetchone()
         conn.commit()
         return {
-            "grievance_id":  str(row[0]),
-            "submitted_at":  row[1].isoformat(),
-            "status":        "OPEN",
+            "grievance_id": str(row[0]),
+            "submitted_at": row[1].isoformat(),
+            "status":       "OPEN",
         }
     finally:
         conn.close()
@@ -1101,6 +1189,8 @@ async def get_grievances():
                 g.customer_id,
                 g.customer_name,
                 g.message,
+                g.transaction_disputes,
+                g.additional_notes,
                 g.submitted_at,
                 g.status,
                 i.risk_tier
@@ -1113,13 +1203,15 @@ async def get_grievances():
             "total": len(rows),
             "grievances": [
                 {
-                    "grievance_id":  str(r["grievance_id"]),
-                    "customer_id":   str(r["customer_id"]),
-                    "customer_name": r["customer_name"],
-                    "message":       r["message"],
-                    "submitted_at":  r["submitted_at"].isoformat() if r["submitted_at"] else None,
-                    "status":        r["status"],
-                    "risk_tier":     r["risk_tier"],
+                    "grievance_id":         str(r["grievance_id"]),
+                    "customer_id":          str(r["customer_id"]),
+                    "customer_name":        r["customer_name"],
+                    "message":              r["message"],
+                    "transaction_disputes": r["transaction_disputes"],
+                    "additional_notes":     r["additional_notes"],
+                    "submitted_at":         r["submitted_at"].isoformat() if r["submitted_at"] else None,
+                    "status":               r["status"],
+                    "risk_tier":            r["risk_tier"],
                 }
                 for r in rows
             ],
