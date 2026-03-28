@@ -46,6 +46,7 @@ class TransactionCategory(BaseModel):
 CATEGORY_STRESS_WEIGHTS: dict = {
     "SALARY_CREDIT":      0.00,
     "EMI_DEBIT":          0.00,
+    "INVESTMENT_DEBIT":   0.00,   # SIP/MF/stock purchase → wealth building, relief
     "FAILED_EMI_DEBIT":   0.90,
     "LENDING_APP_DEBIT":  0.85,
     "LENDING_APP_CREDIT": 0.70,

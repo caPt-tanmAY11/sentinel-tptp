@@ -34,6 +34,7 @@ settings = get_settings()
 RELIEF_CATEGORIES = frozenset({
     "SALARY_CREDIT",   # money from employer → income confirmed
     "EMI_DEBIT",       # on-time EMI → obligations met
+    "INVESTMENT_DEBIT", # SIP / mutual fund / stock purchase → wealth building
 })
 
 # Stress: financial distress signals — score increases
@@ -124,15 +125,63 @@ def apply_delta(current_score: float, delta: float) -> float:
     return round(max(0.0, min(1.0, current_score + delta)), 6)
 
 
-def assign_risk_tier(pulse_score: float) -> dict:
-    """Map pulse score [0.0, 1.0] to risk tier. Thresholds from config."""
+def apply_cibil_modifier(
+    severity: float,
+    direction: str,
+    cibil_score: int,
+) -> tuple:
+    """
+    Adjust effective severity based on CIBIL score.
+    High CIBIL → dampen stress, amplify recovery.
+    Low CIBIL  → amplify stress.
+    Returns (modified_severity, modified_direction).
+    """
+    if cibil_score is None:
+        return severity, direction
+
+    if cibil_score >= 750:
+        if direction == "positive":
+            severity = severity * 0.85          # dampen stress 15%
+        elif direction == "negative":
+            severity = severity * 1.15          # amplify recovery 15%
+    elif cibil_score < 650:
+        if direction == "positive":
+            severity = severity * 1.15          # amplify stress 15%
+        elif direction == "negative":
+            severity = severity * 0.85          # dampen recovery
+
+    return round(min(severity, 1.0), 6), direction
+
+
+def assign_risk_tier(pulse_score: float, cibil_score: int = None) -> dict:
+    """Map pulse score [0.0, 1.0] to risk tier. Thresholds from config.
+    Optionally applies a CIBIL-based nudge: customers with very high CIBIL
+    (750+) get one-tier leniency; very low CIBIL (<600) get one-tier penalty.
+    """
+    # Raw tier from score
     if pulse_score >= settings.RISK_TIER_CRITICAL:
-        return {"tier": 1, "label": "CRITICAL"}
+        raw_tier, raw_label = 1, "CRITICAL"
     elif pulse_score >= settings.RISK_TIER_HIGH:
-        return {"tier": 2, "label": "HIGH"}
+        raw_tier, raw_label = 2, "HIGH"
     elif pulse_score >= settings.RISK_TIER_MODERATE:
-        return {"tier": 3, "label": "MODERATE"}
+        raw_tier, raw_label = 3, "MODERATE"
     elif pulse_score >= settings.RISK_TIER_WATCH:
-        return {"tier": 4, "label": "WATCH"}
+        raw_tier, raw_label = 4, "WATCH"
     else:
-        return {"tier": 5, "label": "STABLE"}
+        raw_tier, raw_label = 5, "STABLE"
+
+    if cibil_score is None:
+        return {"tier": raw_tier, "label": raw_label}
+
+    # CIBIL nudge — max one tier in either direction, never below CRITICAL
+    if cibil_score >= 750 and raw_tier > 1:
+        adjusted_tier = raw_tier + 1          # one tier more lenient (e.g. HIGH→MODERATE)
+    elif cibil_score < 600 and raw_tier < 5:
+        adjusted_tier = raw_tier - 1          # one tier harsher (e.g. WATCH→MODERATE)
+    else:
+        adjusted_tier = raw_tier
+
+    adjusted_tier = max(1, min(5, adjusted_tier))
+
+    _TIER_LABELS = {1: "CRITICAL", 2: "HIGH", 3: "MODERATE", 4: "WATCH", 5: "STABLE"}
+    return {"tier": adjusted_tier, "label": _TIER_LABELS[adjusted_tier]}

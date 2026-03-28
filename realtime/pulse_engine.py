@@ -10,8 +10,6 @@ from __future__ import annotations
 import json
 import time
 import uuid
-import threading
-import requests
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
@@ -25,7 +23,8 @@ from feature_engine.features import compute_all_features
 from feature_engine.delta_features import compute_delta_features, DELTA_FEATURE_NAMES
 from baseline.baseline_builder import get_baseline
 from realtime.pulse_accumulator import (
-    compute_direction, compute_delta, apply_delta, assign_risk_tier
+    compute_direction, compute_delta, apply_delta, assign_risk_tier,
+    apply_cibil_modifier,
 )
 
 settings = get_settings()
@@ -81,6 +80,17 @@ class PulseEngine:
             if baseline is None:
                 return self._neutral_result(event, "no_baseline", t_start)
 
+            # Step 1b: Fetch CIBIL score for this customer
+            try:
+                cursor.execute(
+                    "SELECT credit_bureau_score FROM customers WHERE customer_id = %s",
+                    (cid,)
+                )
+                row = cursor.fetchone()
+                cibil_score = int(row["credit_bureau_score"]) if row and row["credit_bureau_score"] else None
+            except Exception:
+                cibil_score = None
+
             # Step 2: Classify transaction
             txn_dict = {
                 "sender_id": event.sender_id, "sender_name": event.sender_name,
@@ -115,12 +125,16 @@ class PulseEngine:
             else:
                 severity = float(category.stress_weight)  # fallback
 
+            # Step 5b: Apply CIBIL modifier to severity before direction/delta
+            direction_pre = compute_direction(category.category, severity)
+            severity, direction_pre = apply_cibil_modifier(severity, direction_pre, cibil_score)
+
             # Step 6: Direction + bounded delta
-            direction    = compute_direction(category.category, severity)
+            direction    = direction_pre
             pulse_before = self._get_current_pulse_score(cid, cursor)
             delta        = compute_delta(severity, direction, pulse_before)
             pulse_after  = apply_delta(pulse_before, delta)
-            tier_info    = assign_risk_tier(pulse_after)
+            tier_info    = assign_risk_tier(pulse_after, cibil_score)
 
             # Step 7: Update overall pulse score
             self._upsert_pulse_score(cid, pulse_after, tier_info, cursor, conn)
@@ -202,6 +216,7 @@ class PulseEngine:
                 "pulse_score_after":     round(pulse_after, 6),
                 "risk_tier":             tier_info["tier"],
                 "risk_label":            tier_info["label"],
+                "cibil_score":           cibil_score,
                 "top_features":          top_features,
                 "model_version":         model.model_version if (model and model.is_loaded) else "fallback",
                 "scoring_latency_ms":    latency_ms,

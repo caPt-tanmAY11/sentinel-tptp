@@ -41,6 +41,13 @@ _FOOD_PATTERNS       = ["swiggy@", "zomato@", "eatsure@", "dunzo@", "magicpin@"]
 _FUEL_PATTERNS       = ["hpcl@", "iocl@", "bpcl@", "reliancepetro@", "indianoil@", "nayara@"]
 _OTT_PATTERNS        = ["netflix@", "primevideo@", "hotstar@", "spotify@", "jiosaavn@", "gaana@", "sonyliv@", "zee5@"]
 _ECOMMERCE_PATTERNS  = ["flipkart@", "amazon@", "myntra@", "meesho@", "nykaa@", "ajio@", "snapdeal@", "tatacliq@"]
+_INVESTMENT_PATTERNS = [
+    "zerodha@", "groww@", "smallcase@", "paytmmoney@", "coinzerodha@",
+    "sbimf@", "hdfcmf@", "iciciprudmf@", "nipponmf@", "axismf@",
+    "kuvera@", "etmoney@", "angelone@", "upstox@", "iifl@",
+    "nps@", "licmf@", "kotakmf@", "dspim@", "mirae@",
+    "fincart@", "fisdom@", "arthayantra@",
+]
 
 
 def _contains_any(text: str, patterns: list) -> bool:
@@ -117,12 +124,19 @@ class TransactionClassifier:
                 confidence = 0.80
 
         elif platform in ("NEFT", "IMPS", "RTGS") and is_debit:
-            category   = "GENERAL_DEBIT"
-            confidence = 0.80
+            # Investment via NEFT (mutual fund, NPS)
+            if _contains_any(receiver_id, _INVESTMENT_PATTERNS) or _contains_any(receiver_name, ["mutual fund", "mf", "nps", "pension"]):
+                category   = "INVESTMENT_DEBIT"
+                confidence = 0.92
+            else:
+                category   = "GENERAL_DEBIT"
+                confidence = 0.80
 
         # 5–11. UPI categorisation
         elif platform == "UPI":
-            if is_debit and _contains_any(receiver_id, _LENDING_PATTERNS):
+            if is_debit and _contains_any(receiver_id, _INVESTMENT_PATTERNS):
+                category = "INVESTMENT_DEBIT"
+            elif is_debit and _contains_any(receiver_id, _LENDING_PATTERNS):
                 category = "LENDING_APP_DEBIT"
             elif is_credit and _contains_any(sender_id, _LENDING_PATTERNS):
                 category = "LENDING_APP_CREDIT"
