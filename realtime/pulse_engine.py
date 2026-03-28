@@ -48,6 +48,8 @@ class PulseEngine:
         self.redis_client  = redis_client
         self._model        = None
         self._model_loaded = False
+        self._lstm_encoder = None
+        self._lstm_loaded  = False
 
     def _get_model(self):
         if not self._model_loaded:
@@ -60,6 +62,15 @@ class PulseEngine:
                 self._model = None
             self._model_loaded = True
         return self._model
+
+    def _get_lstm_encoder(self):
+        if not self._lstm_loaded:
+            from ml_models.lstm_encoder import load_encoder
+            self._lstm_encoder = load_encoder()
+            self._lstm_loaded = True
+            if self._lstm_encoder:
+                print("  ✓ LSTM encoder loaded for real-time scoring")
+        return self._lstm_encoder
 
     def process(self, event: TransactionEvent, conn=None) -> Dict[str, Any]:
         """
@@ -108,12 +119,33 @@ class PulseEngine:
             except Exception as e:
                 return self._neutral_result(event, f"feature_error:{e}", t_start)
 
-            # Step 4: 48-dim delta vector
+            # Step 4: Delta vector with LSTM embedding
+            from ml_models.lstm_encoder import extract_embedding
+
+            # Fetch last 20 transactions for LSTM sequence
+            lstm_encoder = self._get_lstm_encoder()
+            if lstm_encoder is not None:
+                cursor2 = conn.cursor(cursor_factory=RealDictCursor)
+                cursor2.execute("""
+                    SELECT sender_id, sender_name, receiver_id, receiver_name,
+                           amount, platform, payment_status,
+                           balance_before, balance_after, txn_timestamp
+                    FROM transactions
+                    WHERE customer_id = %s AND txn_timestamp < %s
+                    ORDER BY txn_timestamp DESC LIMIT 20
+                """, (cid, event.txn_timestamp))
+                recent_txns = list(reversed([dict(r) for r in cursor2.fetchall()]))
+                cursor2.close()
+                lstm_emb = extract_embedding(lstm_encoder, recent_txns)
+            else:
+                lstm_emb = None
+
             delta_feats = compute_delta_features(
                 current_features=current_features,
                 baseline=baseline,
                 transaction=txn_dict,
                 category=category,
+                lstm_embedding=lstm_emb,
             )
 
             # Step 5: Model inference → severity

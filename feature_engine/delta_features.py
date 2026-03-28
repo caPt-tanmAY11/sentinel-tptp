@@ -1,30 +1,33 @@
 """
 feature_engine/delta_features.py
 ─────────────────────────────────────────────────────────────────────────────
-Computes the 48-dimensional input vector for the PulseScorer model.
+Computes the full input vector for the PulseScorer model.
 
 Given a new real-time transaction and the customer's stored baseline,
 produces:
-  - 42 z-score deltas (current feature value vs baseline mean/std)
+  - 44 z-score deltas (current feature value vs baseline mean/std)
+  - 44 raw absolute feature values
+  - 16 LSTM sequence embedding dimensions
   - 6 transaction-specific features
 
-The model sees ONLY these 48 numbers. It never sees raw labels.
+The model sees ONLY these numbers. It never sees raw labels.
 ─────────────────────────────────────────────────────────────────────────────
 """
 from __future__ import annotations
 
 import math
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from baseline.baseline_schema import CustomerBaseline
 from enrichment.transaction_category import TransactionCategory
 from feature_engine.features import FEATURE_NAMES
+from ml_models.lstm_encoder import LSTM_FEATURE_NAMES
 
 
-# ── Transaction-specific feature names (appended after the 42 z-scores) ──────
+# ── Transaction-specific feature names (appended after z-scores + raw + lstm) ─
 TXN_FEATURE_NAMES: List[str] = [
-    "inferred_category_encoded",    # 0-14 ordinal encoding of category
+    "inferred_category_encoded",    # 0-15 ordinal encoding of category
     "amount_vs_baseline_ratio",     # amount / customer's avg daily spend
     "time_of_day_risk",             # 0=day(9-18h)  1=evening(18-22h)  2=night(22-9h)
     "day_of_month_risk",            # proximity to EMI due dates [0.0-1.0]
@@ -32,8 +35,12 @@ TXN_FEATURE_NAMES: List[str] = [
     "is_failed",                    # 1.0 if payment_status == 'failed'/'reversed'
 ]
 
-DELTA_FEATURE_NAMES: List[str] = FEATURE_NAMES + TXN_FEATURE_NAMES
-assert len(DELTA_FEATURE_NAMES) == 48
+RAW_FEATURE_NAMES: List[str] = [f"raw_{f}" for f in FEATURE_NAMES]
+
+DELTA_FEATURE_NAMES: List[str] = (
+    FEATURE_NAMES + RAW_FEATURE_NAMES + LSTM_FEATURE_NAMES + TXN_FEATURE_NAMES
+)
+assert len(DELTA_FEATURE_NAMES) == len(FEATURE_NAMES) * 2 + len(LSTM_FEATURE_NAMES) + len(TXN_FEATURE_NAMES)
 
 # Ordinal encoding for categories (stable — never reorder)
 CATEGORY_ENCODING: Dict[str, int] = {
@@ -52,6 +59,7 @@ CATEGORY_ENCODING: Dict[str, int] = {
     "GENERAL_DEBIT":      12,
     "GENERAL_CREDIT":     13,
     "UNKNOWN":            14,
+    "INVESTMENT_DEBIT":   15,
 }
 
 
@@ -60,25 +68,36 @@ def compute_delta_features(
     baseline: CustomerBaseline,
     transaction: Dict[str, Any],
     category: TransactionCategory,
+    lstm_embedding: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
     """
-    Compute the 48-dimensional input vector for PulseScorer.
+    Compute the full input vector for PulseScorer.
 
     Args:
-        current_features: 42 feature values computed as of transaction timestamp
+        current_features: 44 feature values computed as of transaction timestamp
         baseline:         Customer's stored statistical baseline (days 1-90)
         transaction:      Raw transaction dict from the transactions table
         category:         Classifier output for this transaction
+        lstm_embedding:   Optional 16d LSTM embedding dict (zero-fallback if None)
 
     Returns:
-        Dict of {feature_name: float} with exactly 48 entries in DELTA_FEATURE_NAMES order.
+        Dict of {feature_name: float} with entries in DELTA_FEATURE_NAMES order.
     """
     delta: Dict[str, float] = {}
 
-    # ── Part 1: 42 z-score deltas ─────────────────────────────────────────────
+    # ── Part 1: z-score deltas + raw absolutes ────────────────────────────────
     for fname in FEATURE_NAMES:
         current_val = current_features.get(fname, 0.0)
         delta[fname] = baseline.z_score(fname, current_val)
+        delta[f"raw_{fname}"] = current_val
+
+    # ── Part 1b: 16 LSTM embedding dimensions ─────────────────────────────────
+    if lstm_embedding:
+        for name in LSTM_FEATURE_NAMES:
+            delta[name] = lstm_embedding.get(name, 0.0)
+    else:
+        for name in LSTM_FEATURE_NAMES:
+            delta[name] = 0.0
 
     # ── Part 2: 6 transaction-specific features ───────────────────────────────
 

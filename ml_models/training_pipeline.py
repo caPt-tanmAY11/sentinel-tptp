@@ -47,6 +47,7 @@ def _get_db():
 def build_training_dataset(
     conn=None,
     max_customers: Optional[int] = None,
+    lstm_encoder=None,
 ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
     Build (X, y) from real-time window transactions.
@@ -56,11 +57,18 @@ def build_training_dataset(
     FIX (Bug 4): Rows are sorted by txn_timestamp before being returned
     so that the downstream 80/20 split produces a true temporal validation set.
 
+    Args:
+        conn:           Optional DB connection
+        max_customers:  Limit for dev/debug
+        lstm_encoder:   Optional pre-trained LSTM encoder for sequence embeddings
+
     Returns:
-        X:    (n_samples, 48) float32 array — sorted by txn_timestamp ASC
+        X:    (n_samples, n_features) float32 array — sorted by txn_timestamp ASC
         y:    (n_samples,)   int32 binary labels
         cids: list of customer_ids per sample (for audit)
     """
+    from ml_models.lstm_encoder import extract_embedding
+
     close_conn = conn is None
     if conn is None:
         conn = _get_db()
@@ -189,6 +197,9 @@ def build_training_dataset(
             cust_loans = loans_agg.get(cid, default_loans)
             cust_cards = cards_agg.get(cid, default_cards)
 
+            # Sort all customer txns chronologically for LSTM history
+            sorted_cust_txns = sorted(cust_txns, key=lambda t: t["txn_timestamp"])
+
             for txn in rt_txns:
                 txn_ts = txn["txn_timestamp"]
                 try:
@@ -202,8 +213,16 @@ def build_training_dataset(
                     )
                 except Exception:
                     continue
+
+                # LSTM embedding: last 20 transactions before this one
+                txn_history = [t for t in sorted_cust_txns if t["txn_timestamp"] < txn_ts]
+                lstm_emb = extract_embedding(lstm_encoder, txn_history)
+
                 cat = classify_transaction(txn)
-                delta = compute_delta_features(current_feats, baseline, txn, cat)
+                delta = compute_delta_features(
+                    current_feats, baseline, txn, cat,
+                    lstm_embedding=lstm_emb,
+                )
                 x = np.array(
                     [delta.get(f, 0.0) for f in DELTA_FEATURE_NAMES],
                     dtype=np.float32,
@@ -240,37 +259,63 @@ def build_training_dataset(
     finally:
         if close_conn:
             conn.close()
-def apply_smote(X: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    n_pos = int(np.sum(y == 1))
-    n_neg = int(np.sum(y == 0))
-    if n_pos < 6 or n_neg < 6:
-        print("  ⚠ Too few samples for SMOTE — skipping")
-        return X, y
-    print(f"  Before SMOTE: {n_neg} neg / {n_pos} pos ({n_neg//max(n_pos,1)}:1)")
+
+
+def run_lstm_pretraining(conn=None, max_customers: Optional[int] = None):
+    """
+    Pre-train the LSTM encoder on next-transaction-amount prediction.
+    Must run before run_training_pipeline().
+    """
+    from ml_models.lstm_encoder import pretrain_lstm_encoder
+
+    close_conn = conn is None
+    if conn is None:
+        conn = _get_db()
     try:
-        from imblearn.over_sampling import SMOTE
-        from imblearn.under_sampling import TomekLinks
-        from imblearn.pipeline import Pipeline as ImbPipeline
-        pipe = ImbPipeline([
-            ("smote", SMOTE(sampling_strategy=0.35, k_neighbors=min(5, n_pos-1),
-random_state=42)),
-            ("tomek", TomekLinks()),
-        ])
-        X_r, y_r = pipe.fit_resample(X, y)
-        print(f"  After SMOTE:  {int(np.sum(y_r==0))} neg / {int(np.sum(y_r==1))} pos")
-        return X_r, y_r
-    except ImportError:
-        print("  ⚠ imbalanced-learn not installed — skipping SMOTE")
-        return X, y
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        now = datetime.now(timezone.utc)
+        full_window_start = now - timedelta(days=120)
+
+        cursor.execute("""
+            SELECT customer_id FROM customers ORDER BY customer_id LIMIT %s
+        """, (max_customers or 999999,))
+        customers = [str(r["customer_id"]) for r in cursor.fetchall()]
+
+        cursor.execute("""
+            SELECT customer_id, sender_id, sender_name, receiver_id, receiver_name,
+                   amount, platform, payment_status,
+                   balance_before, balance_after, txn_timestamp
+            FROM transactions
+            WHERE customer_id = ANY(%s::uuid[])
+              AND txn_timestamp > %s AND txn_timestamp <= %s
+            ORDER BY customer_id, txn_timestamp ASC
+        """, (customers, full_window_start, now))
+
+        all_txns: Dict[str, list] = defaultdict(list)
+        for row in cursor.fetchall():
+            all_txns[str(row["customer_id"])].append(dict(row))
+        cursor.close()
+
+        print(f"  LSTM pre-training on {len(all_txns)} customers, "
+              f"{sum(len(v) for v in all_txns.values()):,} transactions")
+
+        encoder = pretrain_lstm_encoder(all_txns, epochs=10, batch_size=256)
+        return encoder
+    finally:
+        if close_conn:
+            conn.close()
+
+
 def run_training_pipeline(max_customers: Optional[int] = None) -> Dict[str, Any]:
     """
     Full training pipeline:
       1. Build dataset from real-time window (days 91-120)
       2. Per-customer 80/20 train/val split (no same-customer leakage)
-      3. SMOTE for class balance
-      4. Train LightGBM
-      5. Save model + feature weights to config/feature_weights.json
+      3. Train LightGBM
+      4. Save model + feature weights to config/feature_weights.json
     """
+    from ml_models.lstm_encoder import load_encoder
+
     start = time.time()
     print()
     print("=" * 55)
@@ -279,14 +324,21 @@ def run_training_pipeline(max_customers: Optional[int] = None) -> Dict[str, Any]
     conn = _get_db()
     metrics = {}
     try:
+        # Load pre-trained LSTM encoder (if available)
+        lstm_encoder = load_encoder()
+        if lstm_encoder is not None:
+            print("  ✓ LSTM encoder loaded")
+        else:
+            print("  ⚠ No LSTM encoder found — LSTM features will be zeros")
+
         print("\n[1/5] Building training dataset...")
-        X, y, cid_rows = build_training_dataset(conn=conn, max_customers=max_customers)
+        X, y, cid_rows = build_training_dataset(
+            conn=conn, max_customers=max_customers,
+            lstm_encoder=lstm_encoder,
+        )
 
         print("\n[2/5] Per-customer train/val split (80/20)...")
         # Split by CUSTOMER, not by row, to prevent same-customer leakage.
-        # Previously: temporal row-based split allowed the same customer's
-        # transactions to appear in both train and val, letting the model
-        # memorize customer z-score fingerprints instead of learning patterns.
         unique_cids = list(dict.fromkeys(cid_rows))  # preserve order, deduplicate
         split_idx = int(len(unique_cids) * 0.80)
         train_cids = set(unique_cids[:split_idx])
@@ -299,10 +351,7 @@ def run_training_pipeline(max_customers: Optional[int] = None) -> Dict[str, Any]
         print(f"  Train pos rate: {float(np.mean(y_tr))*100:.1f}%  |  "
               f"Val pos rate: {float(np.mean(y_val))*100:.1f}%")
 
-        print("\n[3/5] SMOTE...")
-        X_tr, y_tr = apply_smote(X_tr, y_tr)
-
-        print("\n[4/5] Training LightGBM...")
+        print("\n[3/5] Training LightGBM...")
         model = SentinelLightGBM()
         metrics = model.train(X_tr, y_tr, X_val, y_val)
         print(f"  AUC:            {metrics['auc']}")
@@ -312,21 +361,30 @@ def run_training_pipeline(max_customers: Optional[int] = None) -> Dict[str, Any]
         # ── Classification report (precision / recall / F1 / accuracy) ────
         from sklearn.metrics import (
             classification_report, accuracy_score, f1_score,
-            precision_score, recall_score, fbeta_score,
+            precision_score, recall_score,
         )
         y_pred_proba = model.predict_severity(X_val)
 
-        # Find optimal threshold that maximises F-beta (β=0.7).
-        # β < 1 penalises low precision more than low recall,
-        # ensuring the model targets industry-grade precision (≥ 0.70)
-        # while maintaining acceptable recall.
-        BETA = 0.7
-        best_fb, best_thr = 0.0, 0.5
+        # Find optimal threshold: break-even point (minimize |P - R|)
+        best_f1, best_thr_f1 = 0.0, 0.5
+        best_diff, best_thr_be = 1.0, 0.5
+
         for thr in np.arange(0.10, 0.90, 0.01):
             yp = (y_pred_proba >= thr).astype(int)
-            fb = float(fbeta_score(y_val, yp, beta=BETA, zero_division=0.0))
-            if fb > best_fb:
-                best_fb, best_thr = fb, float(thr)
+            if np.sum(yp) == 0:
+                continue
+            pr = float(precision_score(y_val, yp, zero_division=0.0))
+            re = float(recall_score(y_val, yp, zero_division=0.0))
+            f1_val = float(f1_score(y_val, yp, zero_division=0.0))
+            if f1_val > best_f1:
+                best_f1 = f1_val
+                best_thr_f1 = float(thr)
+            diff = abs(pr - re)
+            if diff < best_diff and pr > 0.60 and re > 0.60:
+                best_diff = diff
+                best_thr_be = float(thr)
+
+        best_thr = best_thr_be if best_diff < 0.10 else best_thr_f1
 
         y_pred_binary = (y_pred_proba >= best_thr).astype(int)
         accuracy = round(float(accuracy_score(y_val, y_pred_binary)), 4)

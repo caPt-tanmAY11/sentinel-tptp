@@ -2,7 +2,7 @@
 ml_models/lightgbm_model.py
 ─────────────────────────────────────────────────────────────────────────────
 LightGBM wrapper for the PulseScorer.
-Input:  48-dimensional delta feature vector
+Input:  Feature vector (z-score deltas + raw absolutes + transaction-specific)
 Output: severity probability [0.0, 1.0]
 ─────────────────────────────────────────────────────────────────────────────
 """
@@ -23,11 +23,11 @@ LGBM_PARAMS: Dict[str, Any] = {
     "objective":         "binary",
     "metric":            ["binary_logloss", "auc"],
     "boosting_type":     "gbdt",
-    "learning_rate":     0.05,
-    "num_leaves":        31,
-    "max_depth":         7,
-    "min_child_samples": 40,
-    "feature_fraction":  0.75,
+    "learning_rate":     0.03,
+    "num_leaves":        127,
+    "max_depth":         -1,
+    "min_child_samples": 60,
+    "feature_fraction":  0.85,
     "bagging_fraction":  0.80,
     "bagging_freq":      3,
     "reg_alpha":         0.5,
@@ -39,7 +39,7 @@ LGBM_PARAMS: Dict[str, Any] = {
     "n_jobs":           -1,
     "deterministic":     True,
     "seed":              42,
-    "is_unbalance":      True,
+    "scale_pos_weight":  2.8,
 }
 
 
@@ -49,7 +49,7 @@ class SentinelLightGBM:
         self.model         = None
         self.feature_names = DELTA_FEATURE_NAMES
         self.model_version = "lgbm_v2.0.0"
-        self.n_features    = 48
+        self.n_features    = len(DELTA_FEATURE_NAMES)
 
     def train(
         self,
@@ -66,8 +66,6 @@ class SentinelLightGBM:
         n_pos = int(np.sum(y_train == 1))
         n_neg = int(np.sum(y_train == 0))
         params = {**LGBM_PARAMS}
-        if not params.get("is_unbalance", False):
-            params["scale_pos_weight"] = n_neg / max(n_pos, 1)
 
         dtrain = lgb.Dataset(X_train, label=y_train, feature_name=self.feature_names)
         dval   = lgb.Dataset(X_val,   label=y_val,   feature_name=self.feature_names,

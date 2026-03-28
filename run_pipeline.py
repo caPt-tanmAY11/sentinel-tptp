@@ -30,6 +30,16 @@ def run_train(args):
     _train(max_customers=getattr(args, "customers", None))
 
 
+def run_pretrain_lstm(args):
+    """Pre-train the LSTM transaction sequence encoder."""
+    print()
+    print("=" * 55)
+    print("  SENTINEL V2 — LSTM Pre-Training")
+    print("=" * 55)
+    from ml_models.training_pipeline import run_lstm_pretraining
+    run_lstm_pretraining(max_customers=getattr(args, "customers", None))
+
+
 def run_validate(args):
     """Quick validation: load model, run inference on a few samples, print metrics."""
     print()
@@ -64,12 +74,21 @@ def run_validate(args):
 
     # Sanity-check inference
     np.random.seed(99)
-    x_stress = np.zeros(48, dtype=np.float32)
-    x_stress[12] = 4.0   # failed_nach z-score
-    x_stress[22] = 3.0   # lending_app z-score
-    x_stress[47] = 1.0   # is_failed
+    x_stress = np.zeros(model.n_features, dtype=np.float32)
+    
+    # Robustly map features by name since indices can shift
+    def set_feat(name, val):
+        if hasattr(model, "feature_names") and name in model.feature_names:
+            x_stress[model.feature_names.index(name)] = val
+            
+    set_feat("failed_nach_count_30d", 4.0)
+    set_feat("raw_failed_nach_count_30d", 4.0)
+    set_feat("lending_app_transfer_count_30d", 3.0)
+    set_feat("raw_lending_app_transfer_count_30d", 3.0)
+    set_feat("raw_lending_app_dependency_score", 0.8)  # 80% dependency
+    set_feat("is_failed", 1.0)
 
-    x_normal = np.zeros(48, dtype=np.float32)
+    x_normal = np.zeros(model.n_features, dtype=np.float32)
 
     p_stress = model.predict_single(x_stress)
     p_normal = model.predict_single(x_normal)
@@ -271,6 +290,7 @@ def run_all(args):
 
     run_seed(args)
     run_baselines(args)
+    run_pretrain_lstm(args)
     run_train(args)
     run_validate(args)
     run_score_batch(args)
@@ -288,6 +308,7 @@ def run_all(args):
 STEPS = {
     "seed":           run_seed,
     "baselines":      run_baselines,
+    "pretrain-lstm":  run_pretrain_lstm,
     "train":          run_train,
     "validate":       run_validate,
     "score":          run_score_batch,
@@ -308,13 +329,14 @@ def main():
 Steps:
   seed            Generate customers + 120-day raw transactions
   baselines       Build per-customer statistical baselines (days 1-90)
+  pretrain-lstm   Pre-train LSTM transaction sequence encoder
   train           Train LightGBM PulseScorer
   validate        Load model and verify inference + feature importance
   score           Batch-score all customers
   monitor         PSI drift + AIR fairness monitoring
   start-api       Start FastAPI scoring service
   start-consumer  Start Kafka consumer
-  all             Run seed → baselines → train → validate → score → monitor
+  all             Run seed → baselines → pretrain-lstm → train → validate → score → monitor
         """,
     )
     parser.add_argument(

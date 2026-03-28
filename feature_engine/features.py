@@ -51,6 +51,8 @@ FEATURE_NAMES: List[str] = [
     # Group 5: Lending App Activity (4)
     "lending_app_transfer_count_30d", "lending_app_transfer_amount_30d",
     "lending_disbursement_count_30d", "lending_app_dependency_score",
+    # Group 5b: Investment Activity (2)
+    "investment_debit_count_30d", "investment_debit_amount_30d",
     # Group 6: Spending Behaviour (8)
     "discretionary_spend_7d", "grocery_spend_7d", "discretionary_wow_change_pct",
     "food_delivery_spend_7d", "online_spend_7d", "total_debit_30d",
@@ -61,7 +63,7 @@ FEATURE_NAMES: List[str] = [
     "customer_vintage_months", "geography_risk_tier", "inflow_outflow_ratio_30d",
 ]
 
-assert len(FEATURE_NAMES) == 42
+assert len(FEATURE_NAMES) == 44
 
 
 def _get_db():
@@ -279,6 +281,11 @@ def compute_all_features(
         lending_disbursement_count_30d  = float(len(lend_c))
         lending_app_dependency_score    = round(_safe_div(lending_app_transfer_amount_30d, monthly_income), 4)
 
+        # ── GROUP 5b: Investment Activity ──────────────────────────────────────
+        inv_d = W(t30, cat="INVESTMENT_DEBIT", status="success")
+        investment_debit_count_30d  = float(len(inv_d))
+        investment_debit_amount_30d = round(sum(t["amount"] for t in inv_d), 2)
+
         # ── GROUP 6: Spending ──────────────────────────────────────────────────
         disc_cats = ["FOOD_DELIVERY", "ECOMMERCE", "OTT"]
         disc7  = W(t7,  cat=disc_cats, status="success")
@@ -359,6 +366,8 @@ def compute_all_features(
             "lending_app_transfer_amount_30d": lending_app_transfer_amount_30d,
             "lending_disbursement_count_30d": lending_disbursement_count_30d,
             "lending_app_dependency_score": lending_app_dependency_score,
+            "investment_debit_count_30d": investment_debit_count_30d,
+            "investment_debit_amount_30d": investment_debit_amount_30d,
             "discretionary_spend_7d": discretionary_spend_7d,
             "grocery_spend_7d": grocery_spend_7d,
             "discretionary_wow_change_pct": discretionary_wow_change_pct,
@@ -577,6 +586,11 @@ def compute_all_features_from_data(
     lending_disbursement_count_30d  = float(len(lend_c))
     lending_app_dependency_score    = round(_safe_div(lending_app_transfer_amount_30d, monthly_income), 4)
 
+    # ── GROUP 5b: Investment Activity ──────────────────────────────────────
+    inv_d = W(t30, cat="INVESTMENT_DEBIT", status="success")
+    investment_debit_count_30d  = float(len(inv_d))
+    investment_debit_amount_30d = round(sum(t["amount"] for t in inv_d), 2)
+
     # ── GROUP 6: Spending ──────────────────────────────────────────────────
     disc_cats = ["FOOD_DELIVERY", "ECOMMERCE", "OTT"]
     disc7  = W(t7,  cat=disc_cats, status="success")
@@ -643,6 +657,8 @@ def compute_all_features_from_data(
         "lending_app_transfer_amount_30d": lending_app_transfer_amount_30d,
         "lending_disbursement_count_30d": lending_disbursement_count_30d,
         "lending_app_dependency_score": lending_app_dependency_score,
+        "investment_debit_count_30d": investment_debit_count_30d,
+        "investment_debit_amount_30d": investment_debit_amount_30d,
         "discretionary_spend_7d": discretionary_spend_7d,
         "grocery_spend_7d": grocery_spend_7d,
         "discretionary_wow_change_pct": discretionary_wow_change_pct,
